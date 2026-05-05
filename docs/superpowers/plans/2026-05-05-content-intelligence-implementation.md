@@ -485,11 +485,11 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Create: `tests/intelligence/clusters.test.ts`
 - Modify: `src/app/intelligence/page.tsx`
 
-- [ ] Group posts, local articles, and opportunities by normalized topical tokens.
-- [ ] Seed cluster names from high-confidence topic phrases such as "1950s cereal advertising" or "Walking Dead character retrospectives."
-- [ ] Add `upsertTopicClustersFromCatalog` that stores clusters and their items without deleting operator-curated clusters.
-- [ ] Show the first cluster section on the Intelligence page with existing posts, opportunities, and missing-support hints.
-- [ ] Keep automatic cluster changes conservative so the operator can trust the map.
+- [x] Group posts, local articles, and opportunities by normalized topical tokens.
+- [x] Seed cluster names from high-confidence topic phrases such as "1950s cereal advertising" or "Walking Dead character retrospectives."
+- [x] Add `upsertTopicClustersFromCatalog` that stores clusters and their items without deleting operator-curated clusters.
+- [x] Show the first cluster section on the Intelligence page with existing posts, opportunities, and missing-support hints.
+- [x] Keep automatic cluster changes conservative so the operator can trust the map.
 
 ---
 

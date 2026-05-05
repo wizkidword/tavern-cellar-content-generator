@@ -14,6 +14,7 @@ import {
   createOpportunityFromInput,
   updateOpportunityStatus,
 } from "@/lib/intelligence/opportunities";
+import { upsertTopicClustersFromCurrentCatalog } from "@/lib/intelligence/clusters";
 import { assertOperatorAccessFromHeaders } from "@/lib/operator-auth";
 import { syncWordPressCatalog } from "@/lib/wordpress";
 
@@ -42,6 +43,26 @@ export async function syncWordPressCatalogAction() {
     });
   } catch (error) {
     targetPath = buildRedirect("/", {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function refreshTopicClustersAction() {
+  let targetPath = "/intelligence";
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const clusters = await upsertTopicClustersFromCurrentCatalog();
+    revalidatePath("/intelligence");
+    revalidatePath("/opportunities");
+    targetPath = buildRedirect("/intelligence", {
+      message: `Refreshed ${clusters.length} topic clusters from synced coverage.`,
+    });
+  } catch (error) {
+    targetPath = buildRedirect("/intelligence", {
       error: getErrorMessage(error),
     });
   }

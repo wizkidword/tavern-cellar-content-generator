@@ -1,6 +1,6 @@
 import { formatDistanceToNow } from "date-fns";
 
-import { syncWordPressCatalogAction } from "@/app/actions";
+import { refreshTopicClustersAction, syncWordPressCatalogAction } from "@/app/actions";
 import { FoundryNav } from "@/app/foundry-nav";
 import { getIntelligenceData } from "@/lib/intelligence/read-models";
 
@@ -18,6 +18,10 @@ function formatSyncTime(value: Date | null) {
   }
 
   return `${formatDistanceToNow(value, { addSuffix: true })}`;
+}
+
+function formatClusterItemType(value: string) {
+  return value.toLowerCase().replace("_", " ");
 }
 
 export default async function IntelligencePage({ searchParams }: IntelligencePageProps) {
@@ -39,11 +43,18 @@ export default async function IntelligencePage({ searchParams }: IntelligencePag
                 Find the lanes that need the next useful Tavern Cellar article.
               </h1>
             </div>
-            <form action={syncWordPressCatalogAction}>
-              <button className="action-secondary" type="submit">
-                Sync WordPress History
-              </button>
-            </form>
+            <div className="flex flex-wrap gap-3">
+              <form action={refreshTopicClustersAction}>
+                <button className="action-secondary" type="submit">
+                  Refresh Topic Clusters
+                </button>
+              </form>
+              <form action={syncWordPressCatalogAction}>
+                <button className="action-secondary" type="submit">
+                  Sync WordPress History
+                </button>
+              </form>
+            </div>
           </div>
 
           {message ? <p className="message message-success mt-5">{message}</p> : null}
@@ -68,6 +79,63 @@ export default async function IntelligencePage({ searchParams }: IntelligencePag
               ) : null}
             </div>
           </div>
+        </section>
+
+        <section className="panel mt-6 rounded-[2rem] p-6 md:p-8">
+          <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="eyebrow mb-3">Topic Clusters</p>
+              <h2 className="display text-3xl font-semibold text-[#fff1d7]">
+                Coverage groups that can become stronger internal-link lanes.
+              </h2>
+            </div>
+            <span className="status-pill status-healthy">
+              {intelligence.topicClusters.length} visible
+            </span>
+          </div>
+
+          {intelligence.topicClusters.length === 0 ? (
+            <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-5 py-8 text-[var(--muted)]">
+              No high-confidence clusters yet. Sync WordPress history or add a few scored opportunities to give the map enough signal.
+            </div>
+          ) : (
+            <div className="grid gap-5 xl:grid-cols-2">
+              {intelligence.topicClusters.map((cluster) => (
+                <article className="cluster-card" key={cluster.normalizedName}>
+                  <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="eyebrow mb-2">{cluster.items.length} linked items</p>
+                      <h3 className="text-2xl font-semibold text-[#fff4e1]">{cluster.name}</h3>
+                    </div>
+                    <span className="status-pill status-developing">
+                      {cluster.categoryId ? `Lane ${cluster.categoryId}` : "Mixed lane"}
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {cluster.items.slice(0, 4).map((item) => (
+                      <div
+                        className="cluster-item"
+                        key={`${cluster.normalizedName}-${item.itemType}-${item.sitePostId ?? item.articleId ?? item.opportunityId}`}
+                      >
+                        <span>{formatClusterItemType(item.itemType)}</span>
+                        <strong>{item.label}</strong>
+                        <em>{item.status.toLowerCase()}</em>
+                      </div>
+                    ))}
+                  </div>
+
+                  {cluster.missingSupportHints.length > 0 ? (
+                    <div className="mt-4 space-y-2 text-sm leading-6 text-[#d7bf95]">
+                      {cluster.missingSupportHints.map((hint) => (
+                        <p key={hint}>{hint}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="mt-6 grid gap-5 lg:grid-cols-2">

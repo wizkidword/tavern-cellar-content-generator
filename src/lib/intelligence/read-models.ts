@@ -2,6 +2,7 @@ import { ArticleStatus } from "@prisma/client";
 
 import { isAllowedAppCategorySlug, sortCategoriesForApp } from "@/lib/category-config";
 import { prisma } from "@/lib/db";
+import { buildTopicClusterDrafts } from "@/lib/intelligence/clusters";
 import { buildCoverageMap } from "@/lib/intelligence/coverage";
 
 export function parseScoreReasons(value: string) {
@@ -19,7 +20,7 @@ export function parseScoreReasons(value: string) {
 }
 
 export async function getIntelligenceData() {
-  const [allCategories, articles, sitePosts] = await Promise.all([
+  const [allCategories, articles, sitePosts, opportunities] = await Promise.all([
     prisma.category.findMany({
       orderBy: [{ postCount: "desc" }, { name: "asc" }],
     }),
@@ -27,6 +28,8 @@ export async function getIntelligenceData() {
       select: {
         id: true,
         categoryId: true,
+        title: true,
+        angle: true,
         status: true,
         createdAt: true,
       },
@@ -34,6 +37,8 @@ export async function getIntelligenceData() {
     prisma.sitePost.findMany({
       select: {
         id: true,
+        title: true,
+        excerpt: true,
         primaryCategoryId: true,
         rawCategoryIds: true,
         wpStatus: true,
@@ -41,6 +46,17 @@ export async function getIntelligenceData() {
         lastSyncedAt: true,
         link: true,
       },
+    }),
+    prisma.contentOpportunity.findMany({
+      select: {
+        id: true,
+        categoryId: true,
+        primaryKeyword: true,
+        angle: true,
+        status: true,
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 300,
     }),
   ]);
   const categories = sortCategoriesForApp(
@@ -68,6 +84,23 @@ export async function getIntelligenceData() {
       latestSyncAt,
       stale: !latestSyncAt || Date.now() - latestSyncAt.getTime() > 24 * 60 * 60 * 1000,
     },
+    topicClusters: buildTopicClusterDrafts({
+      sitePosts: sitePosts.map((post) => ({
+        id: post.id,
+        categoryId: post.primaryCategoryId,
+        title: post.title,
+        excerpt: post.excerpt,
+        status: post.wpStatus,
+      })),
+      articles: articles.map((article) => ({
+        id: article.id,
+        categoryId: article.categoryId,
+        title: article.title,
+        angle: article.angle,
+        status: article.status,
+      })),
+      opportunities,
+    }).slice(0, 5),
   };
 }
 
