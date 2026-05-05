@@ -53,6 +53,8 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
+On Windows, you can also double-click `Launch-Tavern-Cellar-Foundry.bat` from the project folder. It opens the existing local server if one is already running, or prepares the database, starts the server, and opens `http://127.0.0.1:3000`.
+
 ## Workflow
 
 1. Click `Sync Live WordPress History` to pull categories and current post history.
