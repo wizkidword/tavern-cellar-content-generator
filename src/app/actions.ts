@@ -9,6 +9,7 @@ import {
   regenerateFeaturedImage,
   saveArticleReview,
 } from "@/lib/content-pipeline";
+import { createOpportunityFromInput } from "@/lib/intelligence/opportunities";
 import { assertOperatorAccessFromHeaders } from "@/lib/operator-auth";
 import { syncWordPressCatalog } from "@/lib/wordpress";
 
@@ -64,6 +65,33 @@ export async function generateArticleAction(formData: FormData) {
     });
   } catch (error) {
     targetPath = buildRedirect("/", {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function createOpportunityAction(formData: FormData) {
+  let targetPath = "/opportunities";
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const opportunity = await createOpportunityFromInput({
+      categoryId: Number(String(formData.get("categoryId") ?? "0")),
+      primaryKeyword: String(formData.get("primaryKeyword") ?? ""),
+      angle: String(formData.get("angle") ?? ""),
+      brief: String(formData.get("brief") ?? ""),
+    });
+
+    revalidatePath("/intelligence");
+    revalidatePath("/opportunities");
+    revalidatePath(`/opportunities/${opportunity.id}`);
+    targetPath = buildRedirect(`/opportunities/${opportunity.id}`, {
+      message: "Opportunity scored and saved.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect("/opportunities", {
       error: getErrorMessage(error),
     });
   }

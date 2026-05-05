@@ -390,12 +390,12 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Create: `src/lib/intelligence/opportunities.ts`
 - Modify: `src/app/actions.ts`
 
-- [ ] Add `createOpportunityFromInput` that accepts category, keyword, angle, and brief.
-- [ ] Load category coverage, similar posts, and internal-link candidates from Prisma.
-- [ ] Use the pure helpers to calculate duplicate risk, internal links, and scores.
-- [ ] Persist `ContentOpportunity`, `OpportunityInternalLink`, and `OpportunitySimilarPost` in one Prisma transaction.
-- [ ] Reject duplicate opportunity rows by reusing the `@@unique([categoryId, normalizedKeyword, normalizedAngle])` constraint and returning the existing opportunity.
-- [ ] Add an operator-gated Server Action for creating a manual opportunity.
+- [x] Add `createOpportunityFromInput` that accepts category, keyword, angle, and brief.
+- [x] Load category coverage, similar posts, and internal-link candidates from Prisma.
+- [x] Use the pure helpers to calculate duplicate risk, internal links, and scores.
+- [x] Persist `ContentOpportunity`, `OpportunityInternalLink`, and `OpportunitySimilarPost` in one Prisma transaction.
+- [x] Reject duplicate opportunity rows by reusing the `@@unique([categoryId, normalizedKeyword, normalizedAngle])` constraint and returning the existing opportunity.
+- [x] Add an operator-gated Server Action for creating a manual opportunity.
 
 ---
 
