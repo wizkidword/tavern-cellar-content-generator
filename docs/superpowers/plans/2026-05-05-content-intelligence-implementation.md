@@ -529,15 +529,15 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 **Files:**
 - No new files unless fixes are needed.
 
-- [ ] Run `npm run test`.
-- [ ] Run `npm run lint`.
-- [ ] Run `npm run build`.
-- [ ] Run `npm run db:push` against the local SQLite database.
-- [ ] Start the app with `Launch-Tavern-Cellar-Foundry.bat` or `npm run dev`.
-- [ ] Smoke-test `/`, `/intelligence`, `/opportunities`, and one `/opportunities/[id]` route.
-- [ ] Create one opportunity in Retro Advertising and confirm it shows real internal-link candidates.
-- [ ] Generate one draft from an approved opportunity and confirm the article review page opens.
-- [ ] Confirm no WordPress publish or schedule action runs without explicit operator action.
+- [x] Run `npm run test`.
+- [x] Run `npm run lint`.
+- [x] Run `npm run build`.
+- [x] Run `npm run db:push` against the local SQLite database.
+- [x] Start the app with `Launch-Tavern-Cellar-Foundry.bat` or `npm run dev`.
+- [x] Smoke-test `/`, `/intelligence`, `/opportunities`, and one `/opportunities/[id]` route.
+- [x] Create one opportunity in Retro Advertising and confirm it shows real internal-link candidates.
+- [x] Generate one draft from an approved opportunity and confirm the article review page opens.
+- [x] Confirm no WordPress publish or schedule action runs without explicit operator action.
 
 ---
 
