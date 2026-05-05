@@ -375,12 +375,12 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Modify: `prisma/schema.prisma`
 - Modify: `package-lock.json` only if Prisma generation changes it
 
-- [ ] Add `ContentOpportunityStatus` and `TopicClusterItemType` enums.
-- [ ] Add the five intelligence models from the Data Model section.
-- [ ] Add relation arrays to `Category`, `SitePost`, and `Article`.
-- [ ] Run `npm run db:push`.
-- [ ] Run `npm run db:generate`.
-- [ ] Inspect Prisma output for relation errors before moving to UI work.
+- [x] Add `ContentOpportunityStatus` and `TopicClusterItemType` enums.
+- [x] Add the five intelligence models from the Data Model section.
+- [x] Add relation arrays to `Category`, `SitePost`, and `Article`.
+- [x] Run `npm run db:push`.
+- [x] Run `npm run db:generate`.
+- [x] Inspect Prisma output for relation errors before moving to UI work.
 
 ---
 

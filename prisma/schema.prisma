@@ -15,17 +15,33 @@ enum ArticleStatus {
   SCHEDULED
 }
 
+enum ContentOpportunityStatus {
+  IDEA
+  APPROVED
+  GENERATED
+  REJECTED
+  ARCHIVED
+}
+
+enum TopicClusterItemType {
+  SITE_POST
+  ARTICLE
+  OPPORTUNITY
+}
+
 model Category {
-  id           Int       @id @default(autoincrement())
-  wpCategoryId Int       @unique
-  name         String
-  slug         String    @unique
-  description  String?
-  postCount    Int       @default(0)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  articles     Article[]
-  sitePosts    SitePost[]
+  id                   Int                  @id @default(autoincrement())
+  wpCategoryId         Int                  @unique
+  name                 String
+  slug                 String               @unique
+  description          String?
+  postCount            Int                  @default(0)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  articles             Article[]
+  sitePosts            SitePost[]
+  contentOpportunities ContentOpportunity[]
+  topicClusters        TopicCluster[]
 }
 
 model SitePost {
@@ -45,7 +61,10 @@ model SitePost {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  primaryCategory Category? @relation(fields: [primaryCategoryId], references: [id], onDelete: SetNull)
+  primaryCategory          Category?                 @relation(fields: [primaryCategoryId], references: [id], onDelete: SetNull)
+  opportunityInternalLinks OpportunityInternalLink[]
+  opportunitySimilarPosts  OpportunitySimilarPost[]
+  topicClusterItems        TopicClusterItem[]
 
   @@index([primaryCategoryId])
   @@index([canonicalTopicKey])
@@ -53,44 +72,160 @@ model SitePost {
 }
 
 model Article {
-  id                   String        @id @default(cuid())
-  title                String
-  normalizedTitle      String
-  angle                String
-  normalizedAngle      String
-  primaryKeyword       String
-  normalizedKeyword    String
-  canonicalTopicKey    String
-  slug                 String
-  notes                String?
-  contentMarkdown      String
-  metaTitle            String
-  metaDescription      String
-  excerpt              String
-  tags                 String
-  internalLinks        String
-  featuredImagePrompt  String
-  featuredImageAlt     String
-  featuredImagePath    String?
+  id                    String        @id @default(cuid())
+  title                 String
+  normalizedTitle       String
+  angle                 String
+  normalizedAngle       String
+  primaryKeyword        String
+  normalizedKeyword     String
+  canonicalTopicKey     String
+  slug                  String
+  notes                 String?
+  contentMarkdown       String
+  metaTitle             String
+  metaDescription       String
+  excerpt               String
+  tags                  String
+  internalLinks         String
+  featuredImagePrompt   String
+  featuredImageAlt      String
+  featuredImagePath     String?
   featuredImageMimeType String?
-  wpMediaId            Int?
-  openAiTextModel      String
-  openAiImageModel     String?
-  categoryId           Int
-  status               ArticleStatus @default(GENERATED)
-  wpPostId             Int?          @unique
-  wpStatus             String?
-  scheduledFor         DateTime?
-  scheduledForLocal    String?
-  publishedAt          DateTime?
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
+  wpMediaId             Int?
+  openAiTextModel       String
+  openAiImageModel      String?
+  categoryId            Int
+  status                ArticleStatus @default(GENERATED)
+  wpPostId              Int?          @unique
+  wpStatus              String?
+  scheduledFor          DateTime?
+  scheduledForLocal     String?
+  publishedAt           DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
-  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  category                Category                 @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  contentOpportunities    ContentOpportunity[]
+  opportunitySimilarPosts OpportunitySimilarPost[]
+  topicClusterItems       TopicClusterItem[]
 
   @@unique([categoryId, canonicalTopicKey])
   @@unique([categoryId, slug])
   @@index([status])
   @@index([normalizedTitle])
   @@index([normalizedKeyword])
+}
+
+model ContentOpportunity {
+  id                   String                   @id @default(cuid())
+  categoryId           Int
+  primaryKeyword       String
+  normalizedKeyword    String
+  angle                String
+  normalizedAngle      String
+  brief                String
+  status               ContentOpportunityStatus @default(IDEA)
+  tavernFitScore       Int
+  coverageScore        Int
+  seoScore             Int
+  duplicateRiskScore   Int
+  internalLinkScore    Int
+  publishabilityScore  Int
+  categoryBalanceScore Int
+  overallScore         Int
+  scoreReasons         String
+  duplicateRiskLabel   String
+  generatedArticleId   String?
+  topicClusterId       String?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  category          Category                  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  generatedArticle  Article?                  @relation(fields: [generatedArticleId], references: [id], onDelete: SetNull)
+  topicCluster      TopicCluster?             @relation(fields: [topicClusterId], references: [id], onDelete: SetNull)
+  internalLinks     OpportunityInternalLink[]
+  similarPosts      OpportunitySimilarPost[]
+  topicClusterItems TopicClusterItem[]
+
+  @@unique([categoryId, normalizedKeyword, normalizedAngle])
+  @@index([categoryId])
+  @@index([status])
+  @@index([overallScore])
+}
+
+model OpportunityInternalLink {
+  id            String   @id @default(cuid())
+  opportunityId String
+  sitePostId    String
+  reason        String
+  confidence    Int
+  createdAt     DateTime @default(now())
+
+  opportunity ContentOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  sitePost    SitePost           @relation(fields: [sitePostId], references: [id], onDelete: Cascade)
+
+  @@unique([opportunityId, sitePostId])
+  @@index([sitePostId])
+}
+
+model OpportunitySimilarPost {
+  id            String   @id @default(cuid())
+  opportunityId String
+  sitePostId    String?
+  articleId     String?
+  source        String
+  title         String
+  status        String
+  similarity    Int
+  reason        String
+  createdAt     DateTime @default(now())
+
+  opportunity ContentOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  sitePost    SitePost?          @relation(fields: [sitePostId], references: [id], onDelete: SetNull)
+  article     Article?           @relation(fields: [articleId], references: [id], onDelete: SetNull)
+
+  @@index([opportunityId])
+  @@index([sitePostId])
+  @@index([articleId])
+  @@index([similarity])
+}
+
+model TopicCluster {
+  id             String   @id @default(cuid())
+  name           String
+  normalizedName String   @unique
+  description    String
+  categoryId     Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  category      Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  opportunities ContentOpportunity[]
+  items         TopicClusterItem[]
+
+  @@index([categoryId])
+}
+
+model TopicClusterItem {
+  id             String               @id @default(cuid())
+  topicClusterId String
+  itemType       TopicClusterItemType
+  sitePostId     String?
+  articleId      String?
+  opportunityId  String?
+  label          String
+  sortOrder      Int                  @default(0)
+  createdAt      DateTime             @default(now())
+
+  topicCluster TopicCluster        @relation(fields: [topicClusterId], references: [id], onDelete: Cascade)
+  sitePost     SitePost?           @relation(fields: [sitePostId], references: [id], onDelete: Cascade)
+  article      Article?            @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  opportunity  ContentOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([topicClusterId])
+  @@index([itemType])
+  @@index([sitePostId])
+  @@index([articleId])
+  @@index([opportunityId])
 }
