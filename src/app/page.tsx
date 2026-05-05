@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   syncWordPressCatalogAction,
 } from "@/app/actions";
+import { FoundryNav } from "@/app/foundry-nav";
 import { NewArticleForm } from "@/app/new-article-form";
 import { getDashboardData } from "@/lib/content-pipeline";
 
@@ -27,6 +28,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   return (
     <main className="app-shell">
       <div className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-5 py-6 md:px-8 xl:px-10">
+        <FoundryNav />
         <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
           <div className="panel panel-strong relative overflow-hidden rounded-[2rem] px-6 py-8 md:px-8 md:py-10">
             <div className="mb-10 flex flex-wrap items-center justify-between gap-4">
@@ -64,11 +66,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <p className="mt-2 text-sm text-[var(--muted)]">
                   Live Tavern Cellar categories ready for angle generation and publishing.
                 </p>
+                <Link className="mt-4 inline-flex text-sm font-semibold text-[#ffd58e]" href="/intelligence">
+                  Open intelligence
+                </Link>
               </div>
             </div>
           </div>
 
-          <div className="panel rounded-[2rem] p-6 md:p-8">
+          <div className="panel rounded-[2rem] p-6 md:p-8" id="review-queue">
             <div className="mb-6">
               <p className="eyebrow mb-3">New Article</p>
               <h2 className="display text-3xl font-semibold text-[#fff1d7]">

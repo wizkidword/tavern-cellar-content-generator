@@ -1,0 +1,172 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+
+import { FoundryNav } from "@/app/foundry-nav";
+import { getOpportunityById, parseScoreReasons } from "@/lib/intelligence/read-models";
+
+type OpportunityPageProps = {
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+function firstValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function statusClassName(status: string) {
+  return `status-pill status-${status.toLowerCase()}`;
+}
+
+export default async function OpportunityPage({ params, searchParams }: OpportunityPageProps) {
+  const { id } = await params;
+  const opportunity = await getOpportunityById(id);
+
+  if (!opportunity) {
+    notFound();
+  }
+
+  const query = searchParams ? await searchParams : undefined;
+  const message = firstValue(query?.message);
+  const error = firstValue(query?.error);
+  const reasons = parseScoreReasons(opportunity.scoreReasons);
+  const scoreItems = [
+    ["Overall", opportunity.overallScore],
+    ["Brand", opportunity.tavernFitScore],
+    ["Coverage", opportunity.coverageScore],
+    ["SEO", opportunity.seoScore],
+    ["Duplicate", opportunity.duplicateRiskScore],
+    ["Links", opportunity.internalLinkScore],
+    ["Publish", opportunity.publishabilityScore],
+    ["Balance", opportunity.categoryBalanceScore],
+  ];
+
+  return (
+    <main className="app-shell">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-5 py-6 md:px-8 xl:px-10">
+        <FoundryNav />
+
+        <section className="panel panel-strong rounded-[2rem] p-6 md:p-8">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="eyebrow mb-3">{opportunity.category.name}</p>
+              <h1 className="display max-w-4xl text-4xl leading-none font-semibold text-[#fff1d7] md:text-5xl">
+                {opportunity.primaryKeyword}
+              </h1>
+              <p className="mt-4 max-w-4xl text-lg leading-8 text-[var(--muted)]">{opportunity.angle}</p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <span className={statusClassName(opportunity.status)}>
+                {opportunity.status.toLowerCase()}
+              </span>
+              <span className={`status-pill status-${opportunity.duplicateRiskLabel}`}>
+                {opportunity.duplicateRiskLabel.replace("_", " ")}
+              </span>
+            </div>
+          </div>
+
+          {message ? <p className="message message-success mt-5">{message}</p> : null}
+          {error ? <p className="message message-error mt-5">{error}</p> : null}
+        </section>
+
+        <section className="mt-6 grid gap-6 xl:grid-cols-[1fr_0.85fr]">
+          <div className="space-y-6">
+            <section className="panel rounded-[2rem] p-6 md:p-8">
+              <p className="eyebrow mb-3">Tavern Brief</p>
+              <p className="text-lg leading-8 text-[#fff4e1]">{opportunity.brief}</p>
+
+              <div className="score-grid mt-6">
+                {scoreItems.map(([label, value]) => (
+                  <div className="score-card" key={label}>
+                    <span>{label}</span>
+                    <strong>{value}</strong>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-6 space-y-2 text-sm leading-6 text-[var(--muted)]">
+                {reasons.map((reason) => (
+                  <p key={reason}>{reason}</p>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel rounded-[2rem] p-6 md:p-8">
+              <p className="eyebrow mb-3">Duplicate Radar</p>
+              <h2 className="display mb-5 text-3xl font-semibold text-[#fff1d7]">
+                Similar coverage
+              </h2>
+
+              {opportunity.similarPosts.length === 0 ? (
+                <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-5 py-8 text-[var(--muted)]">
+                  No similar local or WordPress coverage was flagged.
+                </div>
+              ) : null}
+
+              <div className="space-y-3">
+                {opportunity.similarPosts.map((match) => (
+                  <div className="evidence-row" key={match.id}>
+                    <div>
+                      <p className="font-semibold text-[#fff4e1]">{match.title}</p>
+                      <p className="mt-1 text-sm text-[var(--muted)]">{match.reason}</p>
+                    </div>
+                    <div className="text-right text-sm text-[#d7bf95]">
+                      <p>{match.similarity}%</p>
+                      <p>{match.source} / {match.status}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <aside className="space-y-6">
+            <section className="panel rounded-[2rem] p-6">
+              <p className="eyebrow mb-3">Internal Links</p>
+              <h2 className="display mb-5 text-3xl font-semibold text-[#fff1d7]">Real targets</h2>
+
+              {opportunity.internalLinks.length === 0 ? (
+                <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-5 py-8 text-[var(--muted)]">
+                  No real link candidates were found for this opportunity.
+                </div>
+              ) : null}
+
+              <div className="space-y-3">
+                {opportunity.internalLinks.map((link) => (
+                  <a
+                    className="link-card"
+                    href={link.sitePost.link ?? `/${link.sitePost.slug}`}
+                    key={link.id}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    <span>{link.confidence}%</span>
+                    <strong>{link.sitePost.title}</strong>
+                    <em>{link.reason}</em>
+                  </a>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel rounded-[2rem] p-6">
+              <p className="eyebrow mb-3">Workflow</p>
+              <div className="grid gap-3">
+                {opportunity.generatedArticle ? (
+                  <Link className="action-primary text-center" href={`/articles/${opportunity.generatedArticle.id}`}>
+                    Open Generated Draft
+                  </Link>
+                ) : (
+                  <Link className="action-secondary text-center" href="/opportunities">
+                    Back to Opportunities
+                  </Link>
+                )}
+                <Link className="action-secondary text-center" href="/intelligence">
+                  View Coverage Map
+                </Link>
+              </div>
+            </section>
+          </aside>
+        </section>
+      </div>
+    </main>
+  );
+}

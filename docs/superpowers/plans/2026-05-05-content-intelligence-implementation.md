@@ -406,10 +406,10 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Modify: `src/app/layout.tsx` if shared navigation belongs there
 - Modify: `src/app/globals.css`
 
-- [ ] Add top-level navigation links: Dashboard, Intelligence, Opportunities, Review Queue, Calendar.
-- [ ] Keep the current dashboard and quick article generator visible.
-- [ ] Use existing visual language and hover states.
-- [ ] Avoid a major redesign while the intelligence workflow is still being built.
+- [x] Add top-level navigation links: Dashboard, Intelligence, Opportunities, Review Queue, Calendar.
+- [x] Keep the current dashboard and quick article generator visible.
+- [x] Use existing visual language and hover states.
+- [x] Avoid a major redesign while the intelligence workflow is still being built.
 
 ---
 
@@ -419,12 +419,12 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Create: `src/app/intelligence/page.tsx`
 - Modify: `src/app/globals.css`
 
-- [ ] Load categories, articles, and site posts from Prisma.
-- [ ] Render coverage lanes with counts for live, draft, scheduled, generated, and stale data.
-- [ ] Show quiet, developing, healthy, and overloaded labels.
-- [ ] Show link-index health: total synced posts, posts with links, latest sync time, and stale warning.
-- [ ] Add a sync-history action entry point by reusing the existing WordPress sync Server Action.
-- [ ] Include a clear empty state when WordPress has not been synced.
+- [x] Load categories, articles, and site posts from Prisma.
+- [x] Render coverage lanes with counts for live, draft, scheduled, generated, and stale data.
+- [x] Show quiet, developing, healthy, and overloaded labels.
+- [x] Show link-index health: total synced posts, posts with links, latest sync time, and stale warning.
+- [x] Add a sync-history action entry point by reusing the existing WordPress sync Server Action.
+- [x] Include a clear empty state when WordPress has not been synced.
 
 ---
 
@@ -435,11 +435,11 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Modify: `src/app/actions.ts`
 - Modify: `src/app/globals.css`
 
-- [ ] Show persisted opportunities ordered by status and score.
-- [ ] Add filters for category, status, and duplicate-risk label.
-- [ ] Add a manual opportunity form for category, keyword, angle, and brief.
-- [ ] After submit, redirect to the opportunity detail page.
-- [ ] Show score chips for Tavern fit, coverage, SEO, duplicate risk, and links.
+- [x] Show persisted opportunities ordered by status and score.
+- [x] Add filters for category, status, and duplicate-risk label.
+- [x] Add a manual opportunity form for category, keyword, angle, and brief.
+- [x] After submit, redirect to the opportunity detail page.
+- [x] Show score chips for Tavern fit, coverage, SEO, duplicate risk, and links.
 - [ ] Keep rejection/archive actions visible but secondary.
 
 ---
@@ -451,9 +451,9 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Modify: `src/app/actions.ts`
 - Modify: `src/app/globals.css`
 
-- [ ] Show keyword, category, angle, brief, status, and score breakdown.
-- [ ] Show duplicate radar evidence with source and status.
-- [ ] Show real internal-link recommendations with post title, URL, reason, and confidence.
+- [x] Show keyword, category, angle, brief, status, and score breakdown.
+- [x] Show duplicate radar evidence with source and status.
+- [x] Show real internal-link recommendations with post title, URL, reason, and confidence.
 - [ ] Add actions for approve, reject, archive, and generate draft.
 - [ ] Disable generate draft unless the opportunity is `IDEA` or `APPROVED`.
 - [ ] Show a clear warning when duplicate risk is `too_similar` while still allowing the operator to revise instead of blocking completely.
