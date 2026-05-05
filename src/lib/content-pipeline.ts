@@ -2,6 +2,7 @@ import { ArticleStatus } from "@prisma/client";
 
 import { isAllowedAppCategorySlug, sortCategoriesForApp } from "@/lib/category-config";
 import { prisma } from "@/lib/db";
+import { assessDuplicateRisk } from "@/lib/intelligence/duplicates";
 import {
   deleteGeneratedImageAsset,
   generateAngleIdeas,
@@ -12,7 +13,6 @@ import {
 import {
   buildCanonicalTopicKey,
   normalizeTopicValue,
-  similarityScore,
   slugify,
   splitListInput,
 } from "@/lib/topic-utils";
@@ -31,6 +31,8 @@ type DuplicateCandidate = {
   title: string;
   angle: string;
   similarity: number;
+  status: string;
+  reason: string;
 };
 
 type CategoryCoverage = {
@@ -41,7 +43,7 @@ type CategoryCoverage = {
 function summarizeDuplicateMatches(matches: DuplicateCandidate[]) {
   return matches
     .slice(0, 4)
-    .map((match) => `${match.title} (${match.source}, ${Math.round(match.similarity * 100)}% match)`)
+    .map((match) => `${match.title} (${match.source}, ${match.status}, ${match.similarity}% match)`)
     .join("; ");
 }
 
@@ -141,15 +143,20 @@ async function findDuplicateCandidates(input: {
     prisma.article.findMany({
       where: { categoryId: input.categoryId },
       select: {
+        id: true,
         title: true,
         angle: true,
+        categoryId: true,
+        status: true,
       },
       orderBy: { createdAt: "desc" },
       take: 60,
     }),
     prisma.sitePost.findMany({
       select: {
+        id: true,
         title: true,
+        wpStatus: true,
         primaryCategoryId: true,
         rawCategoryIds: true,
       },
@@ -158,19 +165,7 @@ async function findDuplicateCandidates(input: {
     }),
   ]);
 
-  const articleMatches = existingArticles
-    .map((article) => ({
-      source: "app" as const,
-      title: article.title,
-      angle: article.angle,
-      similarity: Math.max(
-        similarityScore(input.title, article.title),
-        similarityScore(input.angle, article.angle),
-      ),
-    }))
-    .filter((match) => match.similarity >= 0.58);
-
-  const siteMatches = sitePosts
+  const sitePostCandidates = sitePosts
     .filter((post) =>
       sitePostBelongsToCategory(post, {
         id: input.categoryId,
@@ -178,17 +173,38 @@ async function findDuplicateCandidates(input: {
       }),
     )
     .map((post) => ({
+      id: post.id,
       source: "site" as const,
+      categoryId: input.categoryId,
       title: post.title,
       angle: post.title,
-      similarity: Math.max(
-        similarityScore(input.title, post.title),
-        similarityScore(input.angle, post.title),
-      ),
-    }))
-    .filter((match) => match.similarity >= 0.62);
+      status: post.wpStatus,
+    }));
 
-  return [...articleMatches, ...siteMatches].sort((left, right) => right.similarity - left.similarity);
+  const assessment = assessDuplicateRisk({
+    keyword: input.title,
+    title: input.title,
+    angle: input.angle,
+    categoryId: input.categoryId,
+    localArticles: existingArticles.map((article) => ({
+      id: article.id,
+      source: "app" as const,
+      categoryId: article.categoryId,
+      title: article.title,
+      angle: article.angle,
+      status: article.status,
+    })),
+    sitePosts: sitePostCandidates,
+  });
+
+  return assessment.matches.map((match) => ({
+    source: match.source,
+    title: match.title,
+    angle: match.angle,
+    similarity: match.similarity,
+    status: match.status,
+    reason: match.reason,
+  }));
 }
 
 export async function createArticle(request: GenerateArticleRequest) {
@@ -201,7 +217,7 @@ export async function createArticle(request: GenerateArticleRequest) {
     angle: request.angle,
   });
 
-  if (exactMatches.some((match) => match.similarity >= 0.82)) {
+  if (exactMatches.some((match) => match.similarity >= 82)) {
     throw new Error(
       `This request looks too close to existing coverage: ${summarizeDuplicateMatches(exactMatches)}`,
     );
@@ -232,7 +248,7 @@ export async function createArticle(request: GenerateArticleRequest) {
     angle: generated.angle,
   });
 
-  if (duplicateMatches.some((match) => match.similarity >= 0.7)) {
+  if (duplicateMatches.some((match) => match.similarity >= 70)) {
     throw new Error(
       `The generated article still overlaps with existing coverage: ${summarizeDuplicateMatches(
         duplicateMatches,

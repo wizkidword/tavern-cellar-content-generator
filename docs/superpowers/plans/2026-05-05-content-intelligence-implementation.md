@@ -210,15 +210,15 @@ model Article {
 - Create: `tests/intelligence/duplicates.test.ts`
 - Create: `tests/intelligence/coverage.test.ts`
 
-- [ ] Add a `test` script using the existing `tsx` dependency and Node's built-in test runner:
+- [x] Add a `test` script using the existing `tsx` dependency and Node's built-in test runner:
 
 ```json
-"test": "tsx --test tests/**/*.test.ts"
+"test": "node scripts/run-tests.mjs"
 ```
 
-- [ ] Add failing tests for tokenization, internal-link matching, score weighting, duplicate labels, and category coverage buckets.
-- [ ] Keep tests pure and database-free for the first slice so scoring rules can move quickly.
-- [ ] Run `npm run test` and confirm the initial failures describe the missing intelligence helpers.
+- [x] Add failing tests for tokenization, internal-link matching, score weighting, duplicate labels, and category coverage buckets.
+- [x] Keep tests pure and database-free for the first slice so scoring rules can move quickly.
+- [x] Run `npm run test` and confirm the initial failures describe the missing intelligence helpers.
 
 ---
 
@@ -230,11 +230,11 @@ model Article {
 - Modify: `tests/intelligence/opportunity-scoring.test.ts`
 - Modify: `tests/intelligence/duplicates.test.ts`
 
-- [ ] Implement `normalizeSearchText(value: string): string`.
-- [ ] Implement `tokenizeForSearch(value: string): string[]`.
-- [ ] Implement `scoreTokenOverlap(sourceTokens: string[], targetTokens: string[]): number`.
-- [ ] Remove short stop words while preserving Tavern-relevant terms such as `ads`, `horror`, `retro`, `dead`, `game`, `movie`, `cereal`, `slasher`, and `walking`.
-- [ ] Verify tests cover punctuation, apostrophes, decade phrases, duplicate words, and empty strings.
+- [x] Implement `normalizeSearchText(value: string): string`.
+- [x] Implement `tokenizeForSearch(value: string): string[]`.
+- [x] Implement `scoreTokenOverlap(sourceTokens: string[], targetTokens: string[]): number`.
+- [x] Remove short stop words while preserving Tavern-relevant terms such as `ads`, `horror`, `retro`, `dead`, `game`, `movie`, `cereal`, `slasher`, and `walking`.
+- [x] Verify tests cover punctuation, apostrophes, decade phrases, duplicate words, and empty strings.
 
 Expected helper shape:
 
@@ -256,12 +256,12 @@ export function tokenizeForSearch(value: string): string[] {
 - Create: `src/lib/intelligence/internal-links.ts`
 - Modify: `tests/intelligence/internal-links.test.ts`
 
-- [ ] Define `InternalLinkCandidate` from the synced `SitePost` fields: `id`, `title`, `slug`, `link`, `excerpt`, `wpStatus`, `categoryName`, `categoryIds`, `publishedAt`.
-- [ ] Define `InternalLinkRecommendation` with `sitePostId`, `title`, `url`, `reason`, `confidence`, `categoryName`, and `wpStatus`.
-- [ ] Match opportunity keyword, angle, and brief tokens against title and excerpt tokens.
-- [ ] Boost matches in the same category and reduce confidence for draft/future posts.
-- [ ] Return only real synced posts with a `link` or usable slug.
-- [ ] Cap results to a default of 5, sorted by confidence.
+- [x] Define `InternalLinkCandidate` from the synced `SitePost` fields: `id`, `title`, `slug`, `link`, `excerpt`, `wpStatus`, `categoryName`, `categoryIds`, `publishedAt`.
+- [x] Define `InternalLinkRecommendation` with `sitePostId`, `title`, `url`, `reason`, `confidence`, `categoryName`, and `wpStatus`.
+- [x] Match opportunity keyword, angle, and brief tokens against title and excerpt tokens.
+- [x] Boost matches in the same category and reduce confidence for draft/future posts.
+- [x] Return only real synced posts with a `link` or usable slug.
+- [x] Cap results to a default of 5, sorted by confidence.
 
 Expected public API:
 
@@ -287,12 +287,12 @@ export function recommendInternalLinks(input: {
 - Modify: `src/lib/content-pipeline.ts`
 - Modify: `tests/intelligence/duplicates.test.ts`
 
-- [ ] Move duplicate comparison rules out of the private content-pipeline helper into a reusable pure function.
-- [ ] Preserve the existing article-generation duplicate guard behavior.
-- [ ] Return visible evidence for opportunities: title, source, status, similarity, and reason.
-- [ ] Label risk as `fresh`, `adjacent`, `crowded`, or `too_similar`.
-- [ ] Treat local articles, WordPress published posts, WordPress drafts, and WordPress future posts as separate evidence sources.
-- [ ] Test exact title collisions, canonical topic collisions, high token overlap, same-keyword/different-angle, and genuinely fresh topics.
+- [x] Move duplicate comparison rules out of the private content-pipeline helper into a reusable pure function.
+- [x] Preserve the existing article-generation duplicate guard behavior.
+- [x] Return visible evidence for opportunities: title, source, status, similarity, and reason.
+- [x] Label risk as `fresh`, `adjacent`, `crowded`, or `too_similar`.
+- [x] Treat local articles, WordPress published posts, WordPress drafts, and WordPress future posts as separate evidence sources.
+- [x] Test exact title collisions, canonical topic collisions, high token overlap, same-keyword/different-angle, and genuinely fresh topics.
 
 Expected public API:
 
@@ -317,12 +317,12 @@ export function assessDuplicateRisk(input: {
 - Create: `src/lib/intelligence/coverage.ts`
 - Modify: `tests/intelligence/coverage.test.ts`
 
-- [ ] Define coverage input from `Category`, `Article`, and `SitePost` fields without requiring Prisma types in the pure helper.
-- [ ] Count published, draft, scheduled, generated, and stale synced posts per lane.
-- [ ] Calculate a category balance label: `quiet`, `developing`, `healthy`, or `overloaded`.
-- [ ] Mark stale sync data when the latest `lastSyncedAt` is older than 24 hours.
-- [ ] Generate short evidence lines such as "No scheduled posts in this lane" or "Live coverage is high but draft pipeline is empty."
-- [ ] Keep thresholds centralized and easy to tune.
+- [x] Define coverage input from `Category`, `Article`, and `SitePost` fields without requiring Prisma types in the pure helper.
+- [x] Count published, draft, scheduled, generated, and stale synced posts per lane.
+- [x] Calculate a category balance label: `quiet`, `developing`, `healthy`, or `overloaded`.
+- [x] Mark stale sync data when the latest `lastSyncedAt` is older than 24 hours.
+- [x] Generate short evidence lines such as "No scheduled posts in this lane" or "Live coverage is high but draft pipeline is empty."
+- [x] Keep thresholds centralized and easy to tune.
 
 Expected public API:
 
@@ -340,14 +340,14 @@ export function buildCoverageMap(input: CoverageInput): CoverageLane[] {
 - Create: `src/lib/intelligence/opportunity-scoring.ts`
 - Modify: `tests/intelligence/opportunity-scoring.test.ts`
 
-- [ ] Score Tavern brand fit from category match, Tavern vocabulary, angle specificity, and non-generic phrasing.
-- [ ] Score coverage value from category balance and stale/quiet lane signals.
-- [ ] Score SEO usefulness from keyword clarity, search-friendly phrasing, and title/angle focus.
-- [ ] Score duplicate risk from `DuplicateRiskAssessment`.
-- [ ] Score internal-link potential from recommendation count and confidence.
-- [ ] Score publishability from brief completeness and absence of weak-topic flags.
-- [ ] Score category balance from the current coverage lane label.
-- [ ] Return `overallScore` as a weighted score from 0-100 plus short reasons.
+- [x] Score Tavern brand fit from category match, Tavern vocabulary, angle specificity, and non-generic phrasing.
+- [x] Score coverage value from category balance and stale/quiet lane signals.
+- [x] Score SEO usefulness from keyword clarity, search-friendly phrasing, and title/angle focus.
+- [x] Score duplicate risk from `DuplicateRiskAssessment`.
+- [x] Score internal-link potential from recommendation count and confidence.
+- [x] Score publishability from brief completeness and absence of weak-topic flags.
+- [x] Score category balance from the current coverage lane label.
+- [x] Return `overallScore` as a weighted score from 0-100 plus short reasons.
 
 Expected public API:
 
