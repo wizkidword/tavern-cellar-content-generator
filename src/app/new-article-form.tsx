@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useFormStatus } from "react-dom";
 
 import { generateArticleAction } from "@/app/actions";
 
@@ -37,12 +38,27 @@ async function postAssistRequest(pathname: string, body: Record<string, unknown>
   return payload.suggestions ?? [];
 }
 
+function GenerateArticleSubmitButton() {
+  const { pending } = useFormStatus();
+
+  return (
+    <button
+      aria-busy={pending}
+      className="action-primary w-full disabled:cursor-wait disabled:opacity-70"
+      disabled={pending}
+      type="submit"
+    >
+      {pending ? "Generating Article Draft..." : "Generate Article Draft"}
+    </button>
+  );
+}
+
 export function NewArticleForm({ categories }: NewArticleFormProps) {
   const [categoryId, setCategoryId] = useState("");
   const [primaryKeyword, setPrimaryKeyword] = useState("");
   const [angle, setAngle] = useState("");
   const [notes, setNotes] = useState("");
-  const [generateImage, setGenerateImage] = useState(true);
+  const [generateImage, setGenerateImage] = useState(false);
   const [keywordSuggestions, setKeywordSuggestions] = useState<string[]>([]);
   const [angleSuggestions, setAngleSuggestions] = useState<string[]>([]);
   const [assistError, setAssistError] = useState("");
@@ -257,12 +273,10 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
           onChange={(event) => setGenerateImage(event.target.checked)}
           type="checkbox"
         />
-        Generate a featured image asset after the article is created.
+        Generate a featured image before opening the draft.
       </label>
 
-      <button className="action-primary w-full" type="submit">
-        Generate Article Draft
-      </button>
+      <GenerateArticleSubmitButton />
     </form>
   );
 }

@@ -46,3 +46,5 @@ next-env.d.ts
 /public/generated/
 /prisma/prisma/*.db
 /prisma/prisma/*.db-*
+/.playwright-mcp/
+/foundry-*.png
