@@ -517,10 +517,10 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Modify: `src/app/articles/[id]/page.tsx`
 - Create: `src/lib/intelligence/article-quality.ts`
 
-- [ ] Store word count, heading count, meta title length, meta description length, internal-link count, and focus-keyphrase placement.
-- [ ] Show a compact quality panel beside WordPress actions.
-- [ ] Add warnings for thin drafts, missing internal links, weak metadata, or absent focus phrase.
-- [ ] Keep quality checks deterministic before adding AI revise tools.
+- [x] Store word count, heading count, meta title length, meta description length, internal-link count, and focus-keyphrase placement.
+- [x] Show a compact quality panel beside WordPress actions.
+- [x] Add warnings for thin drafts, missing internal links, weak metadata, or absent focus phrase.
+- [x] Keep quality checks deterministic before adding AI revise tools.
 
 ---
 

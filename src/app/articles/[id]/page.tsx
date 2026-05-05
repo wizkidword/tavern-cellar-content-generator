@@ -11,6 +11,7 @@ import {
   sendWordPressDraftAction,
 } from "@/app/actions";
 import { getArticleById, getDashboardData } from "@/lib/content-pipeline";
+import { parseArticleQualityWarnings } from "@/lib/intelligence/article-quality";
 
 type ArticlePageProps = {
   params: Promise<{ id: string }>;
@@ -31,6 +32,10 @@ function formatDateInput(value: Date | null) {
 
 function statusClassName(status: string) {
   return `status-pill status-${status.toLowerCase()}`;
+}
+
+function qualitySignal(value: boolean) {
+  return value ? "Yes" : "Needs work";
 }
 
 export default async function ArticlePage({ params, searchParams }: ArticlePageProps) {
@@ -57,6 +62,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
   const message = firstValue(query?.message);
   const error = firstValue(query?.error);
   const sourceOpportunity = article.contentOpportunities[0];
+  const qualityWarnings = parseArticleQualityWarnings(article.qualityWarnings);
 
   return (
     <main className="app-shell">
@@ -205,6 +211,64 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                   WordPress status: {article.wpStatus ?? "Local only"}
                 </div>
               </div>
+            </section>
+
+            <section className="panel rounded-[2rem] p-6">
+              <div className="mb-5">
+                <p className="eyebrow mb-3">Quality Signals</p>
+                <h2 className="display text-3xl font-semibold text-[#fff1d7]">
+                  Draft health
+                </h2>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="mini-stat">
+                  <span>Words</span>
+                  <strong>{article.qualityWordCount}</strong>
+                </div>
+                <div className="mini-stat">
+                  <span>Headings</span>
+                  <strong>{article.qualityHeadingCount}</strong>
+                </div>
+                <div className="mini-stat">
+                  <span>Meta title</span>
+                  <strong>{article.qualityMetaTitleLength}</strong>
+                </div>
+                <div className="mini-stat">
+                  <span>Meta desc</span>
+                  <strong>{article.qualityMetaDescriptionLength}</strong>
+                </div>
+                <div className="mini-stat">
+                  <span>Links</span>
+                  <strong>{article.qualityInternalLinkCount}</strong>
+                </div>
+                <div className="mini-stat">
+                  <span>Focus title</span>
+                  <strong className="text-base">{qualitySignal(article.qualityFocusKeyphraseInTitle)}</strong>
+                </div>
+                <div className="mini-stat">
+                  <span>Focus open</span>
+                  <strong className="text-base">{qualitySignal(article.qualityFocusKeyphraseInOpening)}</strong>
+                </div>
+                <div className="mini-stat">
+                  <span>Focus meta</span>
+                  <strong className="text-base">
+                    {qualitySignal(article.qualityFocusKeyphraseInMetaDescription)}
+                  </strong>
+                </div>
+              </div>
+
+              {qualityWarnings.length > 0 ? (
+                <div className="mt-4 space-y-2 text-sm leading-6 text-[#ffd2c7]">
+                  {qualityWarnings.map((warning) => (
+                    <p key={warning}>{warning}</p>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-4 text-sm leading-6 text-[#ccefdc]">
+                  No deterministic quality warnings on the saved draft.
+                </p>
+              )}
             </section>
 
             {sourceOpportunity ? (

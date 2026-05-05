@@ -2,6 +2,7 @@ import { ArticleStatus } from "@prisma/client";
 
 import { isAllowedAppCategorySlug, sortCategoriesForApp } from "@/lib/category-config";
 import { prisma } from "@/lib/db";
+import { analyzeArticleQuality } from "@/lib/intelligence/article-quality";
 import { assessDuplicateRisk } from "@/lib/intelligence/duplicates";
 import {
   deleteGeneratedImageAsset,
@@ -256,6 +257,15 @@ export async function createArticle(request: GenerateArticleRequest) {
     );
   }
 
+  const quality = analyzeArticleQuality({
+    title: generated.title,
+    primaryKeyword: generated.primaryKeyword,
+    contentMarkdown: generated.contentMarkdown,
+    metaTitle: generated.metaTitle,
+    metaDescription: generated.metaDescription,
+    internalLinks: generated.internalLinksText,
+  });
+
   const article = await prisma.article.create({
     data: {
       categoryId: category.id,
@@ -277,6 +287,15 @@ export async function createArticle(request: GenerateArticleRequest) {
       featuredImagePrompt: generated.featuredImagePrompt.trim(),
       featuredImageAlt: generated.featuredImageAlt.trim(),
       openAiTextModel: generated.textModel,
+      qualityWordCount: quality.wordCount,
+      qualityHeadingCount: quality.headingCount,
+      qualityMetaTitleLength: quality.metaTitleLength,
+      qualityMetaDescriptionLength: quality.metaDescriptionLength,
+      qualityInternalLinkCount: quality.internalLinkCount,
+      qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
+      qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
+      qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
+      qualityWarnings: JSON.stringify(quality.warnings),
     },
     include: {
       category: true,
@@ -425,7 +444,21 @@ export async function saveArticleReview(articleId: string, formData: FormData) {
   const tags = splitListInput(readString(formData, "tags")).join(", ");
   const internalLinks = splitListInput(readString(formData, "internalLinks")).join("\n");
   const notes = readString(formData, "notes");
+  const metaTitle = readString(formData, "metaTitle");
+  const metaDescription = readString(formData, "metaDescription");
+  const excerpt = readString(formData, "excerpt");
+  const featuredImagePrompt = readString(formData, "featuredImagePrompt");
+  const featuredImageAlt = readString(formData, "featuredImageAlt");
+  const contentMarkdown = readString(formData, "contentMarkdown");
   const schedule = readOptionalSchedule(formData, "scheduledFor");
+  const quality = analyzeArticleQuality({
+    title,
+    primaryKeyword,
+    contentMarkdown,
+    metaTitle,
+    metaDescription,
+    internalLinks,
+  });
 
   const category = await prisma.category.findUnique({
     where: { id: categoryId },
@@ -448,17 +481,26 @@ export async function saveArticleReview(articleId: string, formData: FormData) {
       canonicalTopicKey: buildCanonicalTopicKey(category.slug, title, angle, primaryKeyword),
       slug,
       notes: notes || null,
-      metaTitle: readString(formData, "metaTitle"),
-      metaDescription: readString(formData, "metaDescription"),
-      excerpt: readString(formData, "excerpt"),
+      metaTitle,
+      metaDescription,
+      excerpt,
       tags,
       internalLinks,
-      featuredImagePrompt: readString(formData, "featuredImagePrompt"),
-      featuredImageAlt: readString(formData, "featuredImageAlt"),
-      contentMarkdown: readString(formData, "contentMarkdown"),
+      featuredImagePrompt,
+      featuredImageAlt,
+      contentMarkdown,
       scheduledFor: schedule.date,
       scheduledForLocal: schedule.localValue,
       status: ArticleStatus.READY_FOR_REVIEW,
+      qualityWordCount: quality.wordCount,
+      qualityHeadingCount: quality.headingCount,
+      qualityMetaTitleLength: quality.metaTitleLength,
+      qualityMetaDescriptionLength: quality.metaDescriptionLength,
+      qualityInternalLinkCount: quality.internalLinkCount,
+      qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
+      qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
+      qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
+      qualityWarnings: JSON.stringify(quality.warnings),
     },
     include: {
       category: true,
