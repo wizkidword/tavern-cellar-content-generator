@@ -1,0 +1,554 @@
+# Content Intelligence Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build a local Tavern Cellar content intelligence layer that recommends stronger article opportunities from real Tavern coverage, visible duplicate risk, internal-link potential, and Tavern brand fit before spending API time on full drafts.
+
+**Architecture:** Keep the existing Next.js 16 App Router, Server Actions, Prisma/SQLite ledger, OpenAI generation helpers, and WordPress REST sync. Add a focused intelligence domain under `src/lib/intelligence/`, new SQLite-friendly Prisma models, and new top-level strategy routes that feed the existing article generation and WordPress review flow.
+
+**Tech Stack:** Next.js 16.2.4, React 19, TypeScript, Prisma 6.19.3, SQLite, OpenAI, WordPress REST API, Zod, Node 20, `tsx` for lightweight TypeScript test execution.
+
+---
+
+## Implementation Rules
+
+- Keep this a private operator workstation. Do not add public SaaS, multi-user workflow, or automatic publishing.
+- Use synced WordPress history as the source of truth for existing posts and internal links.
+- Make every score explainable in the UI with short evidence lines.
+- Treat AI as an assistant for idea shaping, not as the authority on links, duplicates, or WordPress state.
+- Preserve the current quick draft generator while making the strategy workflow the preferred path.
+- Read the relevant `node_modules/next/dist/docs/` guide before changing App Router forms, Server Actions, route handlers, or caching behavior.
+
+---
+
+## Target File Layout
+
+```text
+src/lib/intelligence/
+  coverage.ts
+  duplicates.ts
+  internal-links.ts
+  opportunity-scoring.ts
+  opportunities.ts
+  clusters.ts
+  text.ts
+
+src/app/intelligence/
+  page.tsx
+
+src/app/opportunities/
+  page.tsx
+  [id]/page.tsx
+
+tests/
+  intelligence/
+    coverage.test.ts
+    duplicates.test.ts
+    internal-links.test.ts
+    opportunity-scoring.test.ts
+    clusters.test.ts
+```
+
+---
+
+## Data Model
+
+Add local models that connect strategic planning to the existing `Article`, `Category`, and `SitePost` tables without changing the current WordPress publishing contract.
+
+```prisma
+enum ContentOpportunityStatus {
+  IDEA
+  APPROVED
+  GENERATED
+  REJECTED
+  ARCHIVED
+}
+
+enum TopicClusterItemType {
+  SITE_POST
+  ARTICLE
+  OPPORTUNITY
+}
+
+model ContentOpportunity {
+  id                    String                   @id @default(cuid())
+  categoryId            Int
+  primaryKeyword        String
+  normalizedKeyword     String
+  angle                 String
+  normalizedAngle       String
+  brief                 String
+  status                ContentOpportunityStatus @default(IDEA)
+  tavernFitScore        Int
+  coverageScore         Int
+  seoScore              Int
+  duplicateRiskScore    Int
+  internalLinkScore     Int
+  publishabilityScore   Int
+  categoryBalanceScore  Int
+  overallScore          Int
+  scoreReasons          String
+  duplicateRiskLabel    String
+  generatedArticleId    String?
+  topicClusterId        String?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  category              Category                 @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  generatedArticle      Article?                 @relation(fields: [generatedArticleId], references: [id], onDelete: SetNull)
+  topicCluster          TopicCluster?            @relation(fields: [topicClusterId], references: [id], onDelete: SetNull)
+  internalLinks         OpportunityInternalLink[]
+  similarPosts          OpportunitySimilarPost[]
+
+  @@index([categoryId])
+  @@index([status])
+  @@index([overallScore])
+  @@unique([categoryId, normalizedKeyword, normalizedAngle])
+}
+
+model OpportunityInternalLink {
+  id            String             @id @default(cuid())
+  opportunityId String
+  sitePostId    String
+  reason        String
+  confidence    Int
+  createdAt     DateTime           @default(now())
+
+  opportunity   ContentOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  sitePost      SitePost           @relation(fields: [sitePostId], references: [id], onDelete: Cascade)
+
+  @@unique([opportunityId, sitePostId])
+  @@index([sitePostId])
+}
+
+model OpportunitySimilarPost {
+  id            String             @id @default(cuid())
+  opportunityId String
+  sitePostId    String?
+  articleId     String?
+  source        String
+  title         String
+  status        String
+  similarity    Int
+  reason        String
+  createdAt     DateTime           @default(now())
+
+  opportunity   ContentOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  sitePost      SitePost?          @relation(fields: [sitePostId], references: [id], onDelete: SetNull)
+  article       Article?           @relation(fields: [articleId], references: [id], onDelete: SetNull)
+
+  @@index([opportunityId])
+  @@index([similarity])
+}
+
+model TopicCluster {
+  id             String                  @id @default(cuid())
+  name           String
+  normalizedName String                  @unique
+  description    String
+  categoryId     Int?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  category       Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  opportunities  ContentOpportunity[]
+  items          TopicClusterItem[]
+
+  @@index([categoryId])
+}
+
+model TopicClusterItem {
+  id             String               @id @default(cuid())
+  topicClusterId String
+  itemType       TopicClusterItemType
+  sitePostId     String?
+  articleId      String?
+  opportunityId  String?
+  label          String
+  sortOrder      Int                  @default(0)
+  createdAt      DateTime             @default(now())
+
+  topicCluster   TopicCluster         @relation(fields: [topicClusterId], references: [id], onDelete: Cascade)
+  sitePost       SitePost?            @relation(fields: [sitePostId], references: [id], onDelete: Cascade)
+  article        Article?             @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  opportunity    ContentOpportunity?  @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([topicClusterId])
+  @@index([itemType])
+}
+```
+
+Also add lightweight relations to existing models:
+
+```prisma
+model Category {
+  contentOpportunities ContentOpportunity[]
+  topicClusters        TopicCluster[]
+}
+
+model SitePost {
+  opportunityInternalLinks OpportunityInternalLink[]
+  opportunitySimilarPosts  OpportunitySimilarPost[]
+  topicClusterItems        TopicClusterItem[]
+}
+
+model Article {
+  contentOpportunities     ContentOpportunity[]
+  opportunitySimilarPosts  OpportunitySimilarPost[]
+  topicClusterItems        TopicClusterItem[]
+}
+```
+
+---
+
+## Task 1: Add Deterministic Intelligence Tests
+
+**Files:**
+- Modify: `package.json`
+- Create: `tests/intelligence/internal-links.test.ts`
+- Create: `tests/intelligence/opportunity-scoring.test.ts`
+- Create: `tests/intelligence/duplicates.test.ts`
+- Create: `tests/intelligence/coverage.test.ts`
+
+- [ ] Add a `test` script using the existing `tsx` dependency and Node's built-in test runner:
+
+```json
+"test": "tsx --test tests/**/*.test.ts"
+```
+
+- [ ] Add failing tests for tokenization, internal-link matching, score weighting, duplicate labels, and category coverage buckets.
+- [ ] Keep tests pure and database-free for the first slice so scoring rules can move quickly.
+- [ ] Run `npm run test` and confirm the initial failures describe the missing intelligence helpers.
+
+---
+
+## Task 2: Build Shared Intelligence Text Helpers
+
+**Files:**
+- Create: `src/lib/intelligence/text.ts`
+- Modify: `tests/intelligence/internal-links.test.ts`
+- Modify: `tests/intelligence/opportunity-scoring.test.ts`
+- Modify: `tests/intelligence/duplicates.test.ts`
+
+- [ ] Implement `normalizeSearchText(value: string): string`.
+- [ ] Implement `tokenizeForSearch(value: string): string[]`.
+- [ ] Implement `scoreTokenOverlap(sourceTokens: string[], targetTokens: string[]): number`.
+- [ ] Remove short stop words while preserving Tavern-relevant terms such as `ads`, `horror`, `retro`, `dead`, `game`, `movie`, `cereal`, `slasher`, and `walking`.
+- [ ] Verify tests cover punctuation, apostrophes, decade phrases, duplicate words, and empty strings.
+
+Expected helper shape:
+
+```ts
+export function tokenizeForSearch(value: string): string[] {
+  return Array.from(new Set(
+    normalizeSearchText(value)
+      .split(" ")
+      .filter((token) => token.length > 1 && !SEARCH_STOP_WORDS.has(token)),
+  ));
+}
+```
+
+---
+
+## Task 3: Build Real Internal Link Matching
+
+**Files:**
+- Create: `src/lib/intelligence/internal-links.ts`
+- Modify: `tests/intelligence/internal-links.test.ts`
+
+- [ ] Define `InternalLinkCandidate` from the synced `SitePost` fields: `id`, `title`, `slug`, `link`, `excerpt`, `wpStatus`, `categoryName`, `categoryIds`, `publishedAt`.
+- [ ] Define `InternalLinkRecommendation` with `sitePostId`, `title`, `url`, `reason`, `confidence`, `categoryName`, and `wpStatus`.
+- [ ] Match opportunity keyword, angle, and brief tokens against title and excerpt tokens.
+- [ ] Boost matches in the same category and reduce confidence for draft/future posts.
+- [ ] Return only real synced posts with a `link` or usable slug.
+- [ ] Cap results to a default of 5, sorted by confidence.
+
+Expected public API:
+
+```ts
+export function recommendInternalLinks(input: {
+  keyword: string;
+  angle: string;
+  brief: string;
+  categoryId: number;
+  candidates: InternalLinkCandidate[];
+  limit?: number;
+}): InternalLinkRecommendation[] {
+  // Pure helper. No database reads.
+}
+```
+
+---
+
+## Task 4: Extract Duplicate And Saturation Radar
+
+**Files:**
+- Create: `src/lib/intelligence/duplicates.ts`
+- Modify: `src/lib/content-pipeline.ts`
+- Modify: `tests/intelligence/duplicates.test.ts`
+
+- [ ] Move duplicate comparison rules out of the private content-pipeline helper into a reusable pure function.
+- [ ] Preserve the existing article-generation duplicate guard behavior.
+- [ ] Return visible evidence for opportunities: title, source, status, similarity, and reason.
+- [ ] Label risk as `fresh`, `adjacent`, `crowded`, or `too_similar`.
+- [ ] Treat local articles, WordPress published posts, WordPress drafts, and WordPress future posts as separate evidence sources.
+- [ ] Test exact title collisions, canonical topic collisions, high token overlap, same-keyword/different-angle, and genuinely fresh topics.
+
+Expected public API:
+
+```ts
+export function assessDuplicateRisk(input: {
+  keyword: string;
+  angle: string;
+  title?: string;
+  categoryId: number;
+  localArticles: DuplicateCandidate[];
+  sitePosts: DuplicateCandidate[];
+}): DuplicateRiskAssessment {
+  // Pure helper. No database writes.
+}
+```
+
+---
+
+## Task 5: Build Coverage Map Heuristics
+
+**Files:**
+- Create: `src/lib/intelligence/coverage.ts`
+- Modify: `tests/intelligence/coverage.test.ts`
+
+- [ ] Define coverage input from `Category`, `Article`, and `SitePost` fields without requiring Prisma types in the pure helper.
+- [ ] Count published, draft, scheduled, generated, and stale synced posts per lane.
+- [ ] Calculate a category balance label: `quiet`, `developing`, `healthy`, or `overloaded`.
+- [ ] Mark stale sync data when the latest `lastSyncedAt` is older than 24 hours.
+- [ ] Generate short evidence lines such as "No scheduled posts in this lane" or "Live coverage is high but draft pipeline is empty."
+- [ ] Keep thresholds centralized and easy to tune.
+
+Expected public API:
+
+```ts
+export function buildCoverageMap(input: CoverageInput): CoverageLane[] {
+  // Pure helper. No database reads.
+}
+```
+
+---
+
+## Task 6: Build Explainable Opportunity Scoring
+
+**Files:**
+- Create: `src/lib/intelligence/opportunity-scoring.ts`
+- Modify: `tests/intelligence/opportunity-scoring.test.ts`
+
+- [ ] Score Tavern brand fit from category match, Tavern vocabulary, angle specificity, and non-generic phrasing.
+- [ ] Score coverage value from category balance and stale/quiet lane signals.
+- [ ] Score SEO usefulness from keyword clarity, search-friendly phrasing, and title/angle focus.
+- [ ] Score duplicate risk from `DuplicateRiskAssessment`.
+- [ ] Score internal-link potential from recommendation count and confidence.
+- [ ] Score publishability from brief completeness and absence of weak-topic flags.
+- [ ] Score category balance from the current coverage lane label.
+- [ ] Return `overallScore` as a weighted score from 0-100 plus short reasons.
+
+Expected public API:
+
+```ts
+export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScoreBreakdown {
+  return {
+    overallScore,
+    tavernFitScore,
+    coverageScore,
+    seoScore,
+    duplicateRiskScore,
+    internalLinkScore,
+    publishabilityScore,
+    categoryBalanceScore,
+    reasons,
+  };
+}
+```
+
+---
+
+## Task 7: Add Prisma Intelligence Models
+
+**Files:**
+- Modify: `prisma/schema.prisma`
+- Modify: `package-lock.json` only if Prisma generation changes it
+
+- [ ] Add `ContentOpportunityStatus` and `TopicClusterItemType` enums.
+- [ ] Add the five intelligence models from the Data Model section.
+- [ ] Add relation arrays to `Category`, `SitePost`, and `Article`.
+- [ ] Run `npm run db:push`.
+- [ ] Run `npm run db:generate`.
+- [ ] Inspect Prisma output for relation errors before moving to UI work.
+
+---
+
+## Task 8: Build Opportunity Persistence Service
+
+**Files:**
+- Create: `src/lib/intelligence/opportunities.ts`
+- Modify: `src/app/actions.ts`
+
+- [ ] Add `createOpportunityFromInput` that accepts category, keyword, angle, and brief.
+- [ ] Load category coverage, similar posts, and internal-link candidates from Prisma.
+- [ ] Use the pure helpers to calculate duplicate risk, internal links, and scores.
+- [ ] Persist `ContentOpportunity`, `OpportunityInternalLink`, and `OpportunitySimilarPost` in one Prisma transaction.
+- [ ] Reject duplicate opportunity rows by reusing the `@@unique([categoryId, normalizedKeyword, normalizedAngle])` constraint and returning the existing opportunity.
+- [ ] Add an operator-gated Server Action for creating a manual opportunity.
+
+---
+
+## Task 9: Add Intelligence Navigation
+
+**Files:**
+- Modify: `src/app/page.tsx`
+- Modify: `src/app/layout.tsx` if shared navigation belongs there
+- Modify: `src/app/globals.css`
+
+- [ ] Add top-level navigation links: Dashboard, Intelligence, Opportunities, Review Queue, Calendar.
+- [ ] Keep the current dashboard and quick article generator visible.
+- [ ] Use existing visual language and hover states.
+- [ ] Avoid a major redesign while the intelligence workflow is still being built.
+
+---
+
+## Task 10: Build Coverage Map Page
+
+**Files:**
+- Create: `src/app/intelligence/page.tsx`
+- Modify: `src/app/globals.css`
+
+- [ ] Load categories, articles, and site posts from Prisma.
+- [ ] Render coverage lanes with counts for live, draft, scheduled, generated, and stale data.
+- [ ] Show quiet, developing, healthy, and overloaded labels.
+- [ ] Show link-index health: total synced posts, posts with links, latest sync time, and stale warning.
+- [ ] Add a sync-history action entry point by reusing the existing WordPress sync Server Action.
+- [ ] Include a clear empty state when WordPress has not been synced.
+
+---
+
+## Task 11: Build Opportunity List Page
+
+**Files:**
+- Create: `src/app/opportunities/page.tsx`
+- Modify: `src/app/actions.ts`
+- Modify: `src/app/globals.css`
+
+- [ ] Show persisted opportunities ordered by status and score.
+- [ ] Add filters for category, status, and duplicate-risk label.
+- [ ] Add a manual opportunity form for category, keyword, angle, and brief.
+- [ ] After submit, redirect to the opportunity detail page.
+- [ ] Show score chips for Tavern fit, coverage, SEO, duplicate risk, and links.
+- [ ] Keep rejection/archive actions visible but secondary.
+
+---
+
+## Task 12: Build Opportunity Detail Page
+
+**Files:**
+- Create: `src/app/opportunities/[id]/page.tsx`
+- Modify: `src/app/actions.ts`
+- Modify: `src/app/globals.css`
+
+- [ ] Show keyword, category, angle, brief, status, and score breakdown.
+- [ ] Show duplicate radar evidence with source and status.
+- [ ] Show real internal-link recommendations with post title, URL, reason, and confidence.
+- [ ] Add actions for approve, reject, archive, and generate draft.
+- [ ] Disable generate draft unless the opportunity is `IDEA` or `APPROVED`.
+- [ ] Show a clear warning when duplicate risk is `too_similar` while still allowing the operator to revise instead of blocking completely.
+
+---
+
+## Task 13: Connect Approved Opportunities To Draft Generation
+
+**Files:**
+- Modify: `src/lib/content-pipeline.ts`
+- Modify: `src/lib/intelligence/opportunities.ts`
+- Modify: `src/app/actions.ts`
+- Modify: `src/app/articles/[id]/page.tsx`
+- Modify: `src/app/opportunities/[id]/page.tsx`
+
+- [ ] Add `createArticleFromOpportunity(opportunityId, options)` that calls the existing article generator with the opportunity's category, keyword, angle, and brief.
+- [ ] Include recommended internal links in the generation prompt as real URLs.
+- [ ] Update the opportunity to `GENERATED` and set `generatedArticleId` after success.
+- [ ] Redirect to the generated article review page.
+- [ ] Preserve the existing quick generator path for manual one-off drafts.
+- [ ] Show the source opportunity on the article review page when present.
+
+---
+
+## Task 14: Build Topic Cluster Foundation
+
+**Files:**
+- Create: `src/lib/intelligence/clusters.ts`
+- Create: `tests/intelligence/clusters.test.ts`
+- Modify: `src/app/intelligence/page.tsx`
+
+- [ ] Group posts, local articles, and opportunities by normalized topical tokens.
+- [ ] Seed cluster names from high-confidence topic phrases such as "1950s cereal advertising" or "Walking Dead character retrospectives."
+- [ ] Add `upsertTopicClustersFromCatalog` that stores clusters and their items without deleting operator-curated clusters.
+- [ ] Show the first cluster section on the Intelligence page with existing posts, opportunities, and missing-support hints.
+- [ ] Keep automatic cluster changes conservative so the operator can trust the map.
+
+---
+
+## Task 15: Add AI-Assisted Opportunity Generation
+
+**Files:**
+- Modify: `src/lib/openai.ts`
+- Modify: `src/lib/intelligence/opportunities.ts`
+- Modify: `src/app/actions.ts`
+- Modify: `src/app/opportunities/page.tsx`
+
+- [ ] Add an OpenAI helper that receives coverage gaps, duplicate evidence summaries, and real internal-link candidates.
+- [ ] Ask for 3-5 Tavern-style opportunities per selected category.
+- [ ] Validate model output with Zod before persisting.
+- [ ] Re-score every AI idea with local deterministic helpers before showing it.
+- [ ] Never let the model invent internal links; model-suggested links must be matched back to synced `SitePost` rows.
+
+---
+
+## Task 16: Add Quality Review Signals After Draft Generation
+
+**Files:**
+- Modify: `prisma/schema.prisma`
+- Modify: `src/lib/content-pipeline.ts`
+- Modify: `src/app/articles/[id]/page.tsx`
+- Create: `src/lib/intelligence/article-quality.ts`
+
+- [ ] Store word count, heading count, meta title length, meta description length, internal-link count, and focus-keyphrase placement.
+- [ ] Show a compact quality panel beside WordPress actions.
+- [ ] Add warnings for thin drafts, missing internal links, weak metadata, or absent focus phrase.
+- [ ] Keep quality checks deterministic before adding AI revise tools.
+
+---
+
+## Task 17: Verification Pass
+
+**Files:**
+- No new files unless fixes are needed.
+
+- [ ] Run `npm run test`.
+- [ ] Run `npm run lint`.
+- [ ] Run `npm run build`.
+- [ ] Run `npm run db:push` against the local SQLite database.
+- [ ] Start the app with `Launch-Tavern-Cellar-Foundry.bat` or `npm run dev`.
+- [ ] Smoke-test `/`, `/intelligence`, `/opportunities`, and one `/opportunities/[id]` route.
+- [ ] Create one opportunity in Retro Advertising and confirm it shows real internal-link candidates.
+- [ ] Generate one draft from an approved opportunity and confirm the article review page opens.
+- [ ] Confirm no WordPress publish or schedule action runs without explicit operator action.
+
+---
+
+## Execution Order
+
+1. Ship pure helpers and tests first: Tasks 1-6.
+2. Add persistence and database changes: Tasks 7-8.
+3. Add strategy UI: Tasks 9-12.
+4. Connect strategy to generation: Task 13.
+5. Add clusters and AI opportunity generation: Tasks 14-15.
+6. Add post-generation quality signals: Task 16.
+7. Run the full verification pass: Task 17.
+
+This order keeps each layer useful on its own and avoids tying the whole upgrade to one giant all-or-nothing change.
