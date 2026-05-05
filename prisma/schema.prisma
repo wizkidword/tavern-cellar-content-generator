@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum ArticleStatus {
+  GENERATED
+  READY_FOR_REVIEW
+  WP_DRAFT
+  PUBLISHED
+  SCHEDULED
+}
+
+model Category {
+  id           Int       @id @default(autoincrement())
+  wpCategoryId Int       @unique
+  name         String
+  slug         String    @unique
+  description  String?
+  postCount    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  articles     Article[]
+  sitePosts    SitePost[]
+}
+
+model SitePost {
+  id                String    @id @default(cuid())
+  wpPostId          Int       @unique
+  title             String
+  normalizedTitle   String
+  slug              String    @unique
+  excerpt           String?
+  canonicalTopicKey String
+  wpStatus          String    @default("publish")
+  publishedAt       DateTime?
+  link              String?
+  primaryCategoryId Int?
+  rawCategoryIds    String
+  lastSyncedAt      DateTime  @default(now())
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  primaryCategory Category? @relation(fields: [primaryCategoryId], references: [id], onDelete: SetNull)
+
+  @@index([primaryCategoryId])
+  @@index([canonicalTopicKey])
+  @@index([normalizedTitle])
+}
+
+model Article {
+  id                   String        @id @default(cuid())
+  title                String
+  normalizedTitle      String
+  angle                String
+  normalizedAngle      String
+  primaryKeyword       String
+  normalizedKeyword    String
+  canonicalTopicKey    String
+  slug                 String
+  notes                String?
+  contentMarkdown      String
+  metaTitle            String
+  metaDescription      String
+  excerpt              String
+  tags                 String
+  internalLinks        String
+  featuredImagePrompt  String
+  featuredImageAlt     String
+  featuredImagePath    String?
+  featuredImageMimeType String?
+  wpMediaId            Int?
+  openAiTextModel      String
+  openAiImageModel     String?
+  categoryId           Int
+  status               ArticleStatus @default(GENERATED)
+  wpPostId             Int?          @unique
+  wpStatus             String?
+  scheduledFor         DateTime?
+  scheduledForLocal    String?
+  publishedAt          DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@unique([categoryId, canonicalTopicKey])
+  @@unique([categoryId, slug])
+  @@index([status])
+  @@index([normalizedTitle])
+  @@index([normalizedKeyword])
+}

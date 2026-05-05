@@ -1,0 +1,180 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+
+import {
+  createArticle,
+  publishArticle,
+  regenerateFeaturedImage,
+  saveArticleReview,
+} from "@/lib/content-pipeline";
+import { assertOperatorAccessFromHeaders } from "@/lib/operator-auth";
+import { syncWordPressCatalog } from "@/lib/wordpress";
+
+function buildRedirect(pathname: string, params: Record<string, string>) {
+  const searchParams = new URLSearchParams(params);
+  return `${pathname}?${searchParams.toString()}`;
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Something went wrong.";
+}
+
+export async function syncWordPressCatalogAction() {
+  let targetPath = "/";
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const result = await syncWordPressCatalog();
+    revalidatePath("/");
+    targetPath = buildRedirect("/", {
+      message: `Synced ${result.categoryCount} categories and ${result.postCount} live posts from WordPress.`,
+    });
+  } catch (error) {
+    targetPath = buildRedirect("/", {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function generateArticleAction(formData: FormData) {
+  let targetPath = "/";
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const article = await createArticle({
+      categoryId: Number(String(formData.get("categoryId") ?? "0")),
+      primaryKeyword: String(formData.get("primaryKeyword") ?? ""),
+      angle: String(formData.get("angle") ?? ""),
+      notes: String(formData.get("notes") ?? ""),
+      generateImage: formData.get("generateImage") === "on",
+    });
+
+    revalidatePath("/");
+    revalidatePath(`/articles/${article.id}`);
+    targetPath = buildRedirect(`/articles/${article.id}`, {
+      message: "Article generated and saved to the review queue.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect("/", {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function saveArticleReviewAction(articleId: string, formData: FormData) {
+  let targetPath = `/articles/${articleId}`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    await saveArticleReview(articleId, formData);
+    revalidatePath(`/articles/${articleId}`);
+    revalidatePath("/");
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      message: "Local review changes saved.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function regenerateFeaturedImageAction(articleId: string, formData: FormData) {
+  let targetPath = `/articles/${articleId}`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    await regenerateFeaturedImage(articleId, formData);
+    revalidatePath(`/articles/${articleId}`);
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      message: "Featured image regenerated.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function sendWordPressDraftAction(articleId: string, formData: FormData) {
+  let targetPath = `/articles/${articleId}`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const article = await publishArticle(articleId, formData, "draft");
+    revalidatePath(`/articles/${articleId}`);
+    revalidatePath("/");
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      message:
+        article.notes?.includes("Yoast SEO REST bridge")
+          ? "Draft pushed to WordPress. Tags were synced. Yoast fields still need the companion bridge plugin installed on WordPress."
+          : "Draft pushed to WordPress. Tags were synced.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function publishNowAction(articleId: string, formData: FormData) {
+  let targetPath = `/articles/${articleId}`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const article = await publishArticle(articleId, formData, "publish");
+    revalidatePath(`/articles/${articleId}`);
+    revalidatePath("/");
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      message:
+        article.notes?.includes("Yoast SEO REST bridge")
+          ? "Article published to WordPress. Tags were synced. Yoast fields still need the companion bridge plugin installed on WordPress."
+          : "Article published to WordPress. Tags were synced.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function scheduleArticleAction(articleId: string, formData: FormData) {
+  let targetPath = `/articles/${articleId}`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const article = await publishArticle(articleId, formData, "future");
+    revalidatePath(`/articles/${articleId}`);
+    revalidatePath("/");
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      message:
+        article.notes?.includes("Yoast SEO REST bridge")
+          ? "Article scheduled in WordPress. Tags were synced. Yoast fields still need the companion bridge plugin installed on WordPress."
+          : "Article scheduled in WordPress. Tags were synced.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
