@@ -440,7 +440,7 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - [x] Add a manual opportunity form for category, keyword, angle, and brief.
 - [x] After submit, redirect to the opportunity detail page.
 - [x] Show score chips for Tavern fit, coverage, SEO, duplicate risk, and links.
-- [ ] Keep rejection/archive actions visible but secondary.
+- [x] Keep rejection/archive actions visible but secondary.
 
 ---
 
@@ -454,9 +454,9 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - [x] Show keyword, category, angle, brief, status, and score breakdown.
 - [x] Show duplicate radar evidence with source and status.
 - [x] Show real internal-link recommendations with post title, URL, reason, and confidence.
-- [ ] Add actions for approve, reject, archive, and generate draft.
-- [ ] Disable generate draft unless the opportunity is `IDEA` or `APPROVED`.
-- [ ] Show a clear warning when duplicate risk is `too_similar` while still allowing the operator to revise instead of blocking completely.
+- [x] Add actions for approve, reject, archive, and generate draft.
+- [x] Disable generate draft unless the opportunity is `IDEA` or `APPROVED`.
+- [x] Show a clear warning when duplicate risk is `too_similar` while still allowing the operator to revise instead of blocking completely.
 
 ---
 
@@ -469,12 +469,12 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Modify: `src/app/articles/[id]/page.tsx`
 - Modify: `src/app/opportunities/[id]/page.tsx`
 
-- [ ] Add `createArticleFromOpportunity(opportunityId, options)` that calls the existing article generator with the opportunity's category, keyword, angle, and brief.
-- [ ] Include recommended internal links in the generation prompt as real URLs.
-- [ ] Update the opportunity to `GENERATED` and set `generatedArticleId` after success.
-- [ ] Redirect to the generated article review page.
-- [ ] Preserve the existing quick generator path for manual one-off drafts.
-- [ ] Show the source opportunity on the article review page when present.
+- [x] Add `createArticleFromOpportunity(opportunityId, options)` that calls the existing article generator with the opportunity's category, keyword, angle, and brief.
+- [x] Include recommended internal links in the generation prompt as real URLs.
+- [x] Update the opportunity to `GENERATED` and set `generatedArticleId` after success.
+- [x] Redirect to the generated article review page.
+- [x] Preserve the existing quick generator path for manual one-off drafts.
+- [x] Show the source opportunity on the article review page when present.
 
 ---
 

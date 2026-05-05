@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildOpportunityInsight } from "@/lib/intelligence/opportunities";
+import {
+  buildOpportunityGenerationNotes,
+  buildOpportunityInsight,
+  canGenerateOpportunityDraft,
+} from "@/lib/intelligence/opportunities";
 
 test("builds an opportunity insight from coverage, duplicate, and link signals", () => {
   const insight = buildOpportunityInsight({
@@ -70,4 +74,33 @@ test("keeps weak opportunities visibly low when duplicate risk is high and links
   assert.equal(insight.internalLinks.length, 0);
   assert.ok(insight.score.overallScore < 55);
   assert.ok(insight.score.reasons.some((reason) => /generic/i.test(reason)));
+});
+
+test("builds generation notes with the opportunity brief and real internal links", () => {
+  const notes = buildOpportunityGenerationNotes({
+    brief: "Focus on Saturday morning toy ad pacing and collecting nostalgia.",
+    overallScore: 82,
+    internalLinks: [
+      {
+        title: "Vintage Mascot Advertising Before Saturday Morning TV",
+        url: "https://taverncellar.test/vintage-mascot-advertising-before-tv/",
+        reason: "title overlap; same category",
+        confidence: 88,
+      },
+    ],
+  });
+
+  assert.match(notes, /Opportunity brief:/);
+  assert.match(notes, /Content intelligence score: 82/);
+  assert.match(notes, /Vintage Mascot Advertising/);
+  assert.match(notes, /https:\/\/taverncellar\.test/);
+  assert.match(notes, /88% confidence/);
+});
+
+test("allows draft generation only from idea or approved opportunities", () => {
+  assert.equal(canGenerateOpportunityDraft("IDEA"), true);
+  assert.equal(canGenerateOpportunityDraft("APPROVED"), true);
+  assert.equal(canGenerateOpportunityDraft("GENERATED"), false);
+  assert.equal(canGenerateOpportunityDraft("REJECTED"), false);
+  assert.equal(canGenerateOpportunityDraft("ARCHIVED"), false);
 });

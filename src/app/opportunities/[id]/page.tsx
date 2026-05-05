@@ -1,7 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import {
+  approveOpportunityAction,
+  archiveOpportunityAction,
+  generateOpportunityDraftAction,
+  rejectOpportunityAction,
+} from "@/app/actions";
 import { FoundryNav } from "@/app/foundry-nav";
+import { canGenerateOpportunityDraft } from "@/lib/intelligence/opportunities";
 import { getOpportunityById, parseScoreReasons } from "@/lib/intelligence/read-models";
 
 type OpportunityPageProps = {
@@ -29,6 +36,7 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
   const message = firstValue(query?.message);
   const error = firstValue(query?.error);
   const reasons = parseScoreReasons(opportunity.scoreReasons);
+  const canGenerate = canGenerateOpportunityDraft(opportunity.status);
   const scoreItems = [
     ["Overall", opportunity.overallScore],
     ["Brand", opportunity.tavernFitScore],
@@ -66,6 +74,12 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
 
           {message ? <p className="message message-success mt-5">{message}</p> : null}
           {error ? <p className="message message-error mt-5">{error}</p> : null}
+          {opportunity.duplicateRiskLabel === "too_similar" ? (
+            <p className="message message-error mt-5">
+              This opportunity is very close to existing coverage. Revise the angle before generating unless
+              you intentionally want a follow-up.
+            </p>
+          ) : null}
         </section>
 
         <section className="mt-6 grid gap-6 xl:grid-cols-[1fr_0.85fr]">
@@ -150,6 +164,22 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
             <section className="panel rounded-[2rem] p-6">
               <p className="eyebrow mb-3">Workflow</p>
               <div className="grid gap-3">
+                <form action={approveOpportunityAction.bind(null, opportunity.id)}>
+                  <button className="action-primary w-full" type="submit">
+                    Approve Opportunity
+                  </button>
+                </form>
+
+                <form action={generateOpportunityDraftAction.bind(null, opportunity.id)} className="grid gap-3">
+                  <label className="flex items-center gap-3 rounded-[1rem] border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#f2e7cf]">
+                    <input name="generateImage" type="checkbox" />
+                    Generate featured image after article draft
+                  </label>
+                  <button className="action-primary w-full" disabled={!canGenerate} type="submit">
+                    Generate Draft From Opportunity
+                  </button>
+                </form>
+
                 {opportunity.generatedArticle ? (
                   <Link className="action-primary text-center" href={`/articles/${opportunity.generatedArticle.id}`}>
                     Open Generated Draft
@@ -162,6 +192,19 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
                 <Link className="action-secondary text-center" href="/intelligence">
                   View Coverage Map
                 </Link>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <form action={rejectOpportunityAction.bind(null, opportunity.id)}>
+                    <button className="action-secondary w-full" type="submit">
+                      Reject
+                    </button>
+                  </form>
+                  <form action={archiveOpportunityAction.bind(null, opportunity.id)}>
+                    <button className="action-secondary w-full" type="submit">
+                      Archive
+                    </button>
+                  </form>
+                </div>
               </div>
             </section>
           </aside>

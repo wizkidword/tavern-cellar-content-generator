@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import { isAllowedAppCategorySlug } from "@/lib/category-config";
+import { createArticle } from "@/lib/content-pipeline";
 import { prisma } from "@/lib/db";
 import { buildCoverageMap, type CoverageBalanceLabel } from "@/lib/intelligence/coverage";
 import {
@@ -43,6 +44,15 @@ export type CreateOpportunityInput = {
   angle: string;
   brief: string;
 };
+
+type OpportunityGenerationLink = {
+  title: string;
+  url: string;
+  reason: string;
+  confidence: number;
+};
+
+type MutableOpportunityStatus = "APPROVED" | "REJECTED" | "ARCHIVED";
 
 const opportunityInclude = {
   category: true,
@@ -133,6 +143,40 @@ export function buildOpportunityInsight(input: BuildOpportunityInsightInput): Op
     internalLinks,
     score,
   };
+}
+
+export function canGenerateOpportunityDraft(status: string) {
+  return status === "IDEA" || status === "APPROVED";
+}
+
+export function buildOpportunityGenerationNotes(input: {
+  brief: string;
+  overallScore: number;
+  internalLinks: OpportunityGenerationLink[];
+}) {
+  const linkLines = input.internalLinks.map(
+    (link) =>
+      `- ${link.title}: ${link.url} (${link.reason}; ${link.confidence}% confidence)`,
+  );
+
+  return [
+    `Opportunity brief:\n${input.brief}`,
+    `Content intelligence score: ${input.overallScore}`,
+    linkLines.length > 0
+      ? `Recommended real internal links:\n${linkLines.join("\n")}`
+      : "Recommended real internal links:\nNo real link candidates were found for this opportunity.",
+  ].join("\n\n");
+}
+
+export async function updateOpportunityStatus(
+  opportunityId: string,
+  status: MutableOpportunityStatus,
+) {
+  return prisma.contentOpportunity.update({
+    where: { id: opportunityId },
+    data: { status },
+    include: opportunityInclude,
+  });
 }
 
 async function findExistingOpportunity(input: {
@@ -338,4 +382,56 @@ export async function createOpportunityFromInput(input: CreateOpportunityInput) 
 
     throw error;
   }
+}
+
+export async function createArticleFromOpportunity(
+  opportunityId: string,
+  options: { generateImage: boolean },
+) {
+  const opportunity = await prisma.contentOpportunity.findUnique({
+    where: { id: opportunityId },
+    include: {
+      internalLinks: {
+        include: {
+          sitePost: true,
+        },
+        orderBy: { confidence: "desc" },
+      },
+    },
+  });
+
+  if (!opportunity) {
+    throw new Error("Opportunity not found.");
+  }
+
+  if (!canGenerateOpportunityDraft(opportunity.status)) {
+    throw new Error("Only idea or approved opportunities can generate a new draft.");
+  }
+
+  const article = await createArticle({
+    categoryId: opportunity.categoryId,
+    primaryKeyword: opportunity.primaryKeyword,
+    angle: opportunity.angle,
+    notes: buildOpportunityGenerationNotes({
+      brief: opportunity.brief,
+      overallScore: opportunity.overallScore,
+      internalLinks: opportunity.internalLinks.map((link) => ({
+        title: link.sitePost.title,
+        url: link.sitePost.link ?? `/${link.sitePost.slug}`,
+        reason: link.reason,
+        confidence: link.confidence,
+      })),
+    }),
+    generateImage: options.generateImage,
+  });
+
+  await prisma.contentOpportunity.update({
+    where: { id: opportunity.id },
+    data: {
+      status: "GENERATED",
+      generatedArticleId: article.id,
+    },
+  });
+
+  return article;
 }

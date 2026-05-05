@@ -56,6 +56,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
   const query = searchParams ? await searchParams : undefined;
   const message = firstValue(query?.message);
   const error = firstValue(query?.error);
+  const sourceOpportunity = article.contentOpportunities[0];
 
   return (
     <main className="app-shell">
@@ -205,6 +206,21 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                 </div>
               </div>
             </section>
+
+            {sourceOpportunity ? (
+              <section className="panel rounded-[2rem] p-6">
+                <div className="mb-5">
+                  <p className="eyebrow mb-3">Source Opportunity</p>
+                  <h2 className="display text-3xl font-semibold text-[#fff1d7]">
+                    {sourceOpportunity.primaryKeyword}
+                  </h2>
+                </div>
+                <p className="text-sm leading-6 text-[var(--muted)]">{sourceOpportunity.angle}</p>
+                <Link className="action-secondary mt-4 inline-flex" href={`/opportunities/${sourceOpportunity.id}`}>
+                  Open Opportunity
+                </Link>
+              </section>
+            ) : null}
 
             <section className="panel rounded-[2rem] p-6">
               <div className="mb-5">

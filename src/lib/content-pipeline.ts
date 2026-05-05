@@ -541,6 +541,10 @@ export async function getArticleById(articleId: string) {
     where: { id: articleId },
     include: {
       category: true,
+      contentOpportunities: {
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+      },
     },
   });
 }

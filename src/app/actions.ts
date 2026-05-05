@@ -9,7 +9,11 @@ import {
   regenerateFeaturedImage,
   saveArticleReview,
 } from "@/lib/content-pipeline";
-import { createOpportunityFromInput } from "@/lib/intelligence/opportunities";
+import {
+  createArticleFromOpportunity,
+  createOpportunityFromInput,
+  updateOpportunityStatus,
+} from "@/lib/intelligence/opportunities";
 import { assertOperatorAccessFromHeaders } from "@/lib/operator-auth";
 import { syncWordPressCatalog } from "@/lib/wordpress";
 
@@ -92,6 +96,78 @@ export async function createOpportunityAction(formData: FormData) {
     });
   } catch (error) {
     targetPath = buildRedirect("/opportunities", {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+async function setOpportunityStatusAction(
+  opportunityId: string,
+  status: "APPROVED" | "REJECTED" | "ARCHIVED",
+  message: string,
+) {
+  let targetPath = `/opportunities/${opportunityId}`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    await updateOpportunityStatus(opportunityId, status);
+    revalidatePath("/opportunities");
+    revalidatePath(`/opportunities/${opportunityId}`);
+    targetPath = buildRedirect(`/opportunities/${opportunityId}`, {
+      message,
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/opportunities/${opportunityId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function approveOpportunityAction(opportunityId: string) {
+  await setOpportunityStatusAction(
+    opportunityId,
+    "APPROVED",
+    "Opportunity approved.",
+  );
+}
+
+export async function rejectOpportunityAction(opportunityId: string) {
+  await setOpportunityStatusAction(
+    opportunityId,
+    "REJECTED",
+    "Opportunity rejected.",
+  );
+}
+
+export async function archiveOpportunityAction(opportunityId: string) {
+  await setOpportunityStatusAction(
+    opportunityId,
+    "ARCHIVED",
+    "Opportunity archived.",
+  );
+}
+
+export async function generateOpportunityDraftAction(opportunityId: string, formData: FormData) {
+  let targetPath = `/opportunities/${opportunityId}`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const article = await createArticleFromOpportunity(opportunityId, {
+      generateImage: formData.get("generateImage") === "on",
+    });
+    revalidatePath("/opportunities");
+    revalidatePath(`/opportunities/${opportunityId}`);
+    revalidatePath(`/articles/${article.id}`);
+    revalidatePath("/");
+    targetPath = buildRedirect(`/articles/${article.id}`, {
+      message: "Draft generated from the approved opportunity.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/opportunities/${opportunityId}`, {
       error: getErrorMessage(error),
     });
   }
