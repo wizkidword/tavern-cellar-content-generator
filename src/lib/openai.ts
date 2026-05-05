@@ -29,6 +29,20 @@ const angleIdeasSchema = z.object({
   suggestions: z.array(z.string().min(12)).min(3).max(6),
 });
 
+const contentOpportunityIdeaSchema = z
+  .object({
+    primaryKeyword: z.string().min(3).max(90),
+    angle: z.string().min(20).max(360),
+    brief: z.string().min(40).max(700),
+  })
+  .strict();
+
+const contentOpportunityIdeasSchema = z
+  .object({
+    opportunities: z.array(contentOpportunityIdeaSchema).min(3).max(5),
+  })
+  .strict();
+
 const articleResponseSchema = {
   type: "object",
   additionalProperties: false,
@@ -72,6 +86,29 @@ const articleResponseSchema = {
   ],
 } as const;
 
+const contentOpportunityIdeasResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    opportunities: {
+      type: "array",
+      minItems: 3,
+      maxItems: 5,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          primaryKeyword: { type: "string" },
+          angle: { type: "string" },
+          brief: { type: "string" },
+        },
+        required: ["primaryKeyword", "angle", "brief"],
+      },
+    },
+  },
+  required: ["opportunities"],
+} as const;
+
 type GenerateArticleInput = {
   categoryName: string;
   categorySlug: string;
@@ -80,6 +117,8 @@ type GenerateArticleInput = {
   notes?: string;
   recentTitles: string[];
 };
+
+export type SuggestedContentOpportunityIdea = z.infer<typeof contentOpportunityIdeaSchema>;
 
 export type GeneratedArticleDraft = z.infer<typeof articlePayloadSchema> & {
   tagsText: string;
@@ -94,6 +133,11 @@ export type SuggestedKeywordIdeas = {
 
 export type SuggestedAngleIdeas = {
   suggestions: string[];
+  textModel: string;
+};
+
+export type SuggestedContentOpportunityIdeas = {
+  opportunities: SuggestedContentOpportunityIdea[];
   textModel: string;
 };
 
@@ -122,6 +166,20 @@ function getClient() {
     textModel: env.OPENAI_TEXT_MODEL,
     imageModel: env.OPENAI_IMAGE_MODEL,
   };
+}
+
+export function parseContentOpportunityIdeasPayload(payload: unknown) {
+  const parsed = contentOpportunityIdeasSchema.safeParse(payload);
+
+  if (!parsed.success) {
+    throw new Error(`Invalid opportunity ideas: ${parsed.error.message}`);
+  }
+
+  return parsed.data.opportunities.map((opportunity) => ({
+    primaryKeyword: opportunity.primaryKeyword.trim(),
+    angle: opportunity.angle.trim(),
+    brief: opportunity.brief.trim(),
+  }));
 }
 
 export async function generateArticleDraft(input: GenerateArticleInput): Promise<GeneratedArticleDraft> {
@@ -201,6 +259,79 @@ export async function generateArticleDraft(input: GenerateArticleInput): Promise
     slug: slugify(parsed.slug || parsed.title),
     tagsText: listToCommaSeparated(parsed.tags),
     internalLinksText: listToMultiline(parsed.internalLinks),
+    textModel,
+  };
+}
+
+export async function generateContentOpportunityIdeas(input: {
+  categoryName: string;
+  categorySlug: string;
+  coverageSummary: string[];
+  duplicateEvidenceSummaries: string[];
+  internalLinkCandidates: Array<{
+    title: string;
+    url: string;
+    excerpt: string | null;
+    categoryName: string | null;
+  }>;
+}): Promise<SuggestedContentOpportunityIdeas> {
+  const { client, textModel } = getClient();
+
+  const response = await client.responses.create({
+    model: textModel,
+    instructions: [
+      "You are Tavern Cellar's content opportunity strategist.",
+      "Suggest search-useful article opportunities that balance Tavern brand fit, SEO value, and coverage gaps.",
+      "Use the provided real WordPress history as context only.",
+      "Do not invent, output, or recommend internal links. The application will match real links locally after validation.",
+      "Avoid topics that closely duplicate the duplicate evidence.",
+      "Return valid JSON that matches the schema exactly.",
+    ].join(" "),
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              `Site category: ${input.categoryName} (${input.categorySlug})`,
+              "Goal: recommend 3 to 5 Tavern-style content opportunities for this category.",
+              "Each opportunity needs a primaryKeyword, a concrete editorial angle, and a brief that can guide a full article.",
+              "Coverage signals:",
+              ...input.coverageSummary.map((line) => `- ${line}`),
+              "Duplicate and saturation evidence to avoid:",
+              ...input.duplicateEvidenceSummaries.map((line) => `- ${line}`),
+              "Real synced Tavern links available for local matching after generation:",
+              ...input.internalLinkCandidates.map((link, index) =>
+                [
+                  `${index + 1}. ${link.title}`,
+                  link.categoryName ? `category: ${link.categoryName}` : null,
+                  `url: ${link.url}`,
+                  link.excerpt ? `excerpt: ${link.excerpt}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" | "),
+              ),
+              "Return only opportunity fields. Do not include URLs, link arrays, scores, or WordPress state.",
+            ].join("\n"),
+          },
+        ],
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "tavern_cellar_content_opportunities",
+        strict: true,
+        schema: contentOpportunityIdeasResponseSchema,
+      },
+    },
+  });
+
+  return {
+    opportunities: parseContentOpportunityIdeasPayload(
+      JSON.parse(response.output_text) as Record<string, unknown>,
+    ),
     textModel,
   };
 }

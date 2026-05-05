@@ -18,6 +18,7 @@ import {
   scoreOpportunity,
   type OpportunityScoreBreakdown,
 } from "@/lib/intelligence/opportunity-scoring";
+import { generateContentOpportunityIdeas } from "@/lib/openai";
 import { normalizeTopicValue } from "@/lib/topic-utils";
 
 type BuildOpportunityInsightInput = {
@@ -110,6 +111,51 @@ function localCategoryIdsForSitePost(
   }
 
   return Array.from(ids);
+}
+
+function sitePostUrl(post: { link: string | null; slug: string }) {
+  if (post.link?.trim()) {
+    return post.link.trim();
+  }
+
+  if (post.slug.trim()) {
+    return `/${post.slug.trim().replace(/^\/+/, "")}`;
+  }
+
+  return null;
+}
+
+function coverageSummary(lane: ReturnType<typeof buildCoverageMap>[number] | undefined) {
+  if (!lane) {
+    return ["No local coverage lane was found for this category yet."];
+  }
+
+  return [
+    `Coverage balance: ${lane.balanceLabel}`,
+    `Live posts: ${lane.counts.live}`,
+    `Generated drafts: ${lane.counts.generated}`,
+    `Scheduled posts: ${lane.counts.scheduled}`,
+    `Draft posts: ${lane.counts.draft}`,
+    ...(lane.evidence.length > 0 ? lane.evidence : ["No immediate sync warnings in this lane."]),
+  ];
+}
+
+function duplicateEvidenceSummary(input: {
+  sitePosts: Array<{ title: string; wpStatus: string }>;
+  articles: Array<{ title: string; status: string }>;
+  opportunities: Array<{ primaryKeyword: string; angle: string; status: string }>;
+}) {
+  const lines = [
+    ...input.sitePosts.slice(0, 8).map((post) => `${post.title} (${post.wpStatus})`),
+    ...input.articles.slice(0, 8).map((article) => `${article.title} (${article.status})`),
+    ...input.opportunities
+      .slice(0, 8)
+      .map((opportunity) => `${opportunity.primaryKeyword}: ${opportunity.angle} (${opportunity.status})`),
+  ];
+
+  return lines.length > 0
+    ? lines
+    : ["No same-category duplicate evidence was found in the local catalog."];
 }
 
 export function buildOpportunityInsight(input: BuildOpportunityInsightInput): OpportunityInsight {
@@ -382,6 +428,157 @@ export async function createOpportunityFromInput(input: CreateOpportunityInput) 
 
     throw error;
   }
+}
+
+export async function generateOpportunitiesForCategory(categoryIdInput: number) {
+  const categoryId = Number(categoryIdInput);
+
+  if (!Number.isInteger(categoryId) || categoryId <= 0) {
+    throw new Error("Pick a valid category before generating opportunity ideas.");
+  }
+
+  const [category, categories, articles, sitePosts, existingOpportunities] = await Promise.all([
+    prisma.category.findUnique({
+      where: { id: categoryId },
+    }),
+    prisma.category.findMany(),
+    prisma.article.findMany({
+      select: {
+        id: true,
+        categoryId: true,
+        title: true,
+        angle: true,
+        status: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 300,
+    }),
+    prisma.sitePost.findMany({
+      select: {
+        id: true,
+        title: true,
+        slug: true,
+        link: true,
+        excerpt: true,
+        wpStatus: true,
+        publishedAt: true,
+        primaryCategoryId: true,
+        rawCategoryIds: true,
+        lastSyncedAt: true,
+        primaryCategory: {
+          select: {
+            name: true,
+          },
+        },
+      },
+      orderBy: { publishedAt: "desc" },
+      take: 500,
+    }),
+    prisma.contentOpportunity.findMany({
+      select: {
+        primaryKeyword: true,
+        angle: true,
+        status: true,
+        categoryId: true,
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 100,
+    }),
+  ]);
+
+  if (!category || !isAllowedAppCategorySlug(category.slug)) {
+    throw new Error("Pick one of the active Foundry categories before generating opportunity ideas.");
+  }
+
+  const wpCategoryMap = new Map(categories.map((item) => [item.wpCategoryId, item.id]));
+  const coverageLane = buildCoverageMap({
+    categories,
+    sitePosts: sitePosts.map((post) => ({
+      id: post.id,
+      primaryCategoryId: post.primaryCategoryId,
+      rawCategoryIds: post.rawCategoryIds,
+      wpStatus: post.wpStatus,
+      publishedAt: post.publishedAt,
+      lastSyncedAt: post.lastSyncedAt,
+    })),
+    articles: articles.map((article) => ({
+      id: article.id,
+      categoryId: article.categoryId,
+      status: article.status,
+      createdAt: article.createdAt,
+    })),
+  }).find((lane) => lane.categoryId === category.id);
+  const sitePostsWithLocalCategories = sitePosts.map((post) => ({
+    ...post,
+    localCategoryIds: localCategoryIdsForSitePost(post, wpCategoryMap),
+  }));
+  const matchingSitePosts = sitePostsWithLocalCategories.filter((post) =>
+    post.localCategoryIds.includes(category.id),
+  );
+  const realLinkCandidates = sitePostsWithLocalCategories
+    .map((post) => {
+      const url = sitePostUrl(post);
+
+      if (!url) {
+        return null;
+      }
+
+      return {
+        title: post.title,
+        url,
+        excerpt: post.excerpt,
+        categoryName: post.primaryCategory?.name ?? null,
+        sameCategory: post.localCategoryIds.includes(category.id),
+      };
+    })
+    .filter(
+      (candidate): candidate is {
+        title: string;
+        url: string;
+        excerpt: string | null;
+        categoryName: string | null;
+        sameCategory: boolean;
+      } => Boolean(candidate),
+    )
+    .sort((left, right) => Number(right.sameCategory) - Number(left.sameCategory))
+    .slice(0, 16)
+    .map((candidate) => ({
+      title: candidate.title,
+      url: candidate.url,
+      excerpt: candidate.excerpt,
+      categoryName: candidate.categoryName,
+    }));
+  const ideas = await generateContentOpportunityIdeas({
+    categoryName: category.name,
+    categorySlug: category.slug,
+    coverageSummary: coverageSummary(coverageLane),
+    duplicateEvidenceSummaries: duplicateEvidenceSummary({
+      sitePosts: matchingSitePosts,
+      articles: articles.filter((article) => article.categoryId === category.id),
+      opportunities: existingOpportunities.filter(
+        (opportunity) => opportunity.categoryId === category.id,
+      ),
+    }),
+    internalLinkCandidates: realLinkCandidates,
+  });
+  const opportunities = [];
+
+  for (const idea of ideas.opportunities) {
+    opportunities.push(
+      await createOpportunityFromInput({
+        categoryId: category.id,
+        primaryKeyword: idea.primaryKeyword,
+        angle: idea.angle,
+        brief: idea.brief,
+      }),
+    );
+  }
+
+  return {
+    opportunities,
+    textModel: ideas.textModel,
+  };
 }
 
 export async function createArticleFromOpportunity(

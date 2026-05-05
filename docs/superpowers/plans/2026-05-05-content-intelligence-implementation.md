@@ -501,11 +501,11 @@ export function scoreOpportunity(input: OpportunityScoreInput): OpportunityScore
 - Modify: `src/app/actions.ts`
 - Modify: `src/app/opportunities/page.tsx`
 
-- [ ] Add an OpenAI helper that receives coverage gaps, duplicate evidence summaries, and real internal-link candidates.
-- [ ] Ask for 3-5 Tavern-style opportunities per selected category.
-- [ ] Validate model output with Zod before persisting.
-- [ ] Re-score every AI idea with local deterministic helpers before showing it.
-- [ ] Never let the model invent internal links; model-suggested links must be matched back to synced `SitePost` rows.
+- [x] Add an OpenAI helper that receives coverage gaps, duplicate evidence summaries, and real internal-link candidates.
+- [x] Ask for 3-5 Tavern-style opportunities per selected category.
+- [x] Validate model output with Zod before persisting.
+- [x] Re-score every AI idea with local deterministic helpers before showing it.
+- [x] Never let the model invent internal links; model-suggested links must be matched back to synced `SitePost` rows.
 
 ---
 

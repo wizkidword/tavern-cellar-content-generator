@@ -6,6 +6,7 @@ import {
   buildOpportunityInsight,
   canGenerateOpportunityDraft,
 } from "@/lib/intelligence/opportunities";
+import { parseContentOpportunityIdeasPayload } from "@/lib/openai";
 
 test("builds an opportunity insight from coverage, duplicate, and link signals", () => {
   const insight = buildOpportunityInsight({
@@ -103,4 +104,53 @@ test("allows draft generation only from idea or approved opportunities", () => {
   assert.equal(canGenerateOpportunityDraft("GENERATED"), false);
   assert.equal(canGenerateOpportunityDraft("REJECTED"), false);
   assert.equal(canGenerateOpportunityDraft("ARCHIVED"), false);
+});
+
+test("validates AI opportunity ideas without accepting invented links", () => {
+  const opportunities = parseContentOpportunityIdeasPayload({
+    opportunities: [
+      {
+        primaryKeyword: "1950s cereal ads",
+        angle: "Use 1950s cereal ads to unpack sweetness, convenience, and scientific nutrition.",
+        brief: "Focus on package design, mascot warmth, and the postwar pantry as a Tavern Cellar nostalgia lane.",
+      },
+      {
+        primaryKeyword: "vintage mascot advertising",
+        angle: "Trace how vintage mascot advertising made brands feel like familiar household characters.",
+        brief: "Connect cereal, toy, and snack mascots to repeat viewing, kid appeal, and collectible memory.",
+      },
+      {
+        primaryKeyword: "retro breakfast commercials",
+        angle: "Show how retro breakfast commercials sold speed, comfort, and a brighter family morning.",
+        brief: "Use real ad language and visual cues to build a stronger Retro Advertising content lane.",
+      },
+    ],
+  });
+
+  assert.equal(opportunities.length, 3);
+  assert.equal(opportunities[0]?.primaryKeyword, "1950s cereal ads");
+  assert.throws(
+    () =>
+      parseContentOpportunityIdeasPayload({
+        opportunities: [
+          {
+            primaryKeyword: "1950s cereal ads",
+            angle: "Use 1950s cereal ads to unpack sweetness, convenience, and scientific nutrition.",
+            brief: "Focus on package design, mascot warmth, and the postwar pantry as a nostalgia lane.",
+            internalLinks: ["https://made-up.example/fake-link"],
+          },
+          {
+            primaryKeyword: "vintage mascot advertising",
+            angle: "Trace how vintage mascot advertising made brands feel like familiar household characters.",
+            brief: "Connect cereal, toy, and snack mascots to repeat viewing, kid appeal, and collectible memory.",
+          },
+          {
+            primaryKeyword: "retro breakfast commercials",
+            angle: "Show how retro breakfast commercials sold speed, comfort, and a brighter family morning.",
+            brief: "Use real ad language and visual cues to build a stronger Retro Advertising content lane.",
+          },
+        ],
+      }),
+    /invalid opportunity ideas/i,
+  );
 });

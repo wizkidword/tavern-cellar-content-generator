@@ -12,6 +12,7 @@ import {
 import {
   createArticleFromOpportunity,
   createOpportunityFromInput,
+  generateOpportunitiesForCategory,
   updateOpportunityStatus,
 } from "@/lib/intelligence/opportunities";
 import { upsertTopicClustersFromCurrentCatalog } from "@/lib/intelligence/clusters";
@@ -114,6 +115,28 @@ export async function createOpportunityAction(formData: FormData) {
     revalidatePath(`/opportunities/${opportunity.id}`);
     targetPath = buildRedirect(`/opportunities/${opportunity.id}`, {
       message: "Opportunity scored and saved.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect("/opportunities", {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function generateOpportunityIdeasAction(formData: FormData) {
+  let targetPath = "/opportunities";
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const categoryId = Number(String(formData.get("categoryId") ?? "0"));
+    const result = await generateOpportunitiesForCategory(categoryId);
+    revalidatePath("/intelligence");
+    revalidatePath("/opportunities");
+    targetPath = buildRedirect("/opportunities", {
+      categoryId: String(categoryId),
+      message: `Generated ${result.opportunities.length} AI-assisted opportunities and re-scored them locally.`,
     });
   } catch (error) {
     targetPath = buildRedirect("/opportunities", {

@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { createOpportunityAction } from "@/app/actions";
+import { createOpportunityAction, generateOpportunityIdeasAction } from "@/app/actions";
 import { FoundryNav } from "@/app/foundry-nav";
 import { getOpportunityListData, parseScoreReasons } from "@/lib/intelligence/read-models";
 
@@ -46,6 +46,29 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
 
             {message ? <p className="message message-success mb-4">{message}</p> : null}
             {error ? <p className="message message-error mb-4">{error}</p> : null}
+
+            <form action={generateOpportunityIdeasAction} className="mb-6 rounded-[1.4rem] border border-[var(--line)] bg-black/10 p-4">
+              <p className="eyebrow mb-3">AI Planning Pass</p>
+              <label className="label" htmlFor="aiCategoryId">
+                Category
+              </label>
+              <select
+                className="field mb-4"
+                id="aiCategoryId"
+                name="categoryId"
+                defaultValue={selectedCategoryId}
+                required
+              >
+                {data.categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+              <button className="action-secondary w-full" type="submit">
+                Generate AI Opportunity Ideas
+              </button>
+            </form>
 
             <form action={createOpportunityAction} className="space-y-4">
               <div>
