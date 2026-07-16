@@ -4,14 +4,37 @@ import { notFound } from "next/navigation";
 import { format } from "date-fns";
 
 import {
+  generateArticleComparisonAction,
   publishNowAction,
+  randomScheduleArticleAction,
+  regenerateArticleBodyImagesAction,
   regenerateFeaturedImageAction,
   saveArticleReviewAction,
   scheduleArticleAction,
   sendWordPressDraftAction,
 } from "@/app/actions";
-import { getArticleById, getDashboardData } from "@/lib/content-pipeline";
+import { MAX_ARTICLE_BODY_IMAGE_COUNT } from "@/lib/article-body-images";
+import {
+  getArticleById,
+  getArticleImageRecoveryState,
+  getDashboardData,
+} from "@/lib/content-pipeline";
+import {
+  DEFAULT_FAL_IMAGE_MODEL,
+  DEFAULT_FEATURED_IMAGE_PROVIDER,
+  DEFAULT_OPENAI_IMAGE_MODEL,
+  FAL_IMAGE_MODEL_OPTIONS,
+  FEATURED_IMAGE_HEIGHT,
+  FEATURED_IMAGE_PROVIDER_OPTIONS,
+  FEATURED_IMAGE_WIDTH,
+  OPENAI_IMAGE_MODEL_OPTIONS,
+  resolveOpenAIImageModel,
+} from "@/lib/featured-image-models";
 import { parseArticleQualityWarnings } from "@/lib/intelligence/article-quality";
+import {
+  getComparisonCandidateOpenAITextModels,
+  getOpenAITextModelLabel,
+} from "@/lib/openai-models";
 
 type ArticlePageProps = {
   params: Promise<{ id: string }>;
@@ -63,6 +86,17 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
   const error = firstValue(query?.error);
   const sourceOpportunity = article.contentOpportunities[0];
   const qualityWarnings = parseArticleQualityWarnings(article.qualityWarnings);
+  const comparisonModels = getComparisonCandidateOpenAITextModels(article.openAiTextModel);
+  const hasComparisons = article.modelComparisons.length > 0;
+  const bodyImageDefaultCount = String(article.bodyImages.length || 2);
+  const imageRecovery = getArticleImageRecoveryState({
+    featuredImagePath: article.featuredImagePath,
+    bodyImageCount: article.bodyImages.length,
+    notes: article.notes,
+  });
+  const openAiImageModelDefault = article.openAiImageModel
+    ? resolveOpenAIImageModel(article.openAiImageModel)
+    : DEFAULT_OPENAI_IMAGE_MODEL;
 
   return (
     <main className="app-shell">
@@ -81,11 +115,41 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
             <span className="rounded-full border border-[var(--line)] px-4 py-2 text-sm text-[var(--muted)]">
               {article.category.name}
             </span>
+            <span className="rounded-full border border-[var(--line)] px-4 py-2 text-sm text-[var(--muted)]">
+              {getOpenAITextModelLabel(article.openAiTextModel)}
+            </span>
           </div>
         </div>
 
         {message ? <p className="message message-success mb-4">{message}</p> : null}
         {error ? <p className="message message-error mb-4">{error}</p> : null}
+
+        <section className="panel mb-6 rounded-[1.5rem] p-4 md:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <p className="eyebrow mb-2">Model Comparison</p>
+              <p className="text-sm leading-6 text-[var(--muted)]">
+                Current draft: {getOpenAITextModelLabel(article.openAiTextModel)}. Generate saved
+                comparison drafts with the same keyword and angle.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {hasComparisons ? (
+                <Link className="action-secondary text-center" href={`/articles/${article.id}/compare`}>
+                  Open Side-by-Side
+                </Link>
+              ) : null}
+              {comparisonModels.map((model) => (
+                <form action={generateArticleComparisonAction.bind(null, article.id)} key={model}>
+                  <input name="comparisonModel" type="hidden" value={model} />
+                  <button className="action-primary" type="submit">
+                    Generate / Refresh {getOpenAITextModelLabel(model)}
+                  </button>
+                </form>
+              ))}
+            </div>
+          </div>
+        </section>
 
         <form action={saveArticleReviewAction.bind(null, article.id)} className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
           <section className="panel rounded-[2rem] p-6 md:p-8">
@@ -202,6 +266,13 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                     type="submit"
                   >
                     Schedule in WordPress
+                  </button>
+                  <button
+                    className="action-secondary"
+                    formAction={randomScheduleArticleAction.bind(null, article.id)}
+                    type="submit"
+                  >
+                    Random Schedule (Up to 60 Days)
                   </button>
                 </div>
 
@@ -359,14 +430,36 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                     alt={article.featuredImageAlt}
                     className="w-full rounded-[1.4rem] border border-[var(--line)] object-cover"
                     src={article.featuredImagePath}
-                    width={1536}
-                    height={1024}
+                    width={FEATURED_IMAGE_WIDTH}
+                    height={FEATURED_IMAGE_HEIGHT}
                   />
                 ) : (
                   <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-4 py-12 text-center text-[var(--muted)]">
                     No featured image generated yet.
                   </div>
                 )}
+
+                {imageRecovery.featuredImage.canRetry ? (
+                  <div className="message message-error">
+                    <p className="font-semibold text-[#fff4e1]">
+                      {imageRecovery.featuredImage.reason === "failed"
+                        ? "Featured image generation failed."
+                        : "Featured image is missing."}
+                    </p>
+                    <p className="mt-1 text-sm leading-6">
+                      Review the prompt and selected generator, then retry without regenerating the article.
+                    </p>
+                    <button
+                      className="action-primary mt-3 w-full"
+                      formAction={regenerateFeaturedImageAction.bind(null, article.id)}
+                      type="submit"
+                    >
+                      {imageRecovery.featuredImage.reason === "failed"
+                        ? "Retry Featured Image"
+                        : "Generate Featured Image"}
+                    </button>
+                  </div>
+                ) : null}
 
                 <div>
                   <label className="label" htmlFor="featuredImagePrompt">
@@ -401,12 +494,203 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                   <textarea className="field min-h-28" id="notes" name="notes" defaultValue={article.notes ?? ""} />
                 </div>
 
+                <div>
+                  <label className="label" htmlFor="imageProvider">
+                    Featured Image Generator
+                  </label>
+                  <select
+                    className="field"
+                    defaultValue={DEFAULT_FEATURED_IMAGE_PROVIDER}
+                    id="imageProvider"
+                    name="imageProvider"
+                    required
+                  >
+                    {FEATURED_IMAGE_PROVIDER_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="label" htmlFor="falImageModel">
+                    fal.ai Model
+                  </label>
+                  <select
+                    className="field"
+                    defaultValue={DEFAULT_FAL_IMAGE_MODEL}
+                    id="falImageModel"
+                    name="falImageModel"
+                    required
+                  >
+                    {FAL_IMAGE_MODEL_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="label" htmlFor="openAiImageModel">
+                    GPT Image Model
+                  </label>
+                  <select
+                    className="field"
+                    defaultValue={openAiImageModelDefault}
+                    id="openAiImageModel"
+                    name="openAiImageModel"
+                    required
+                  >
+                    {OPENAI_IMAGE_MODEL_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <button
                   className="action-secondary w-full"
                   formAction={regenerateFeaturedImageAction.bind(null, article.id)}
                   type="submit"
                 >
                   Generate / Refresh Featured Image
+                </button>
+              </div>
+            </section>
+
+            <section className="panel rounded-[2rem] p-6">
+              <div className="mb-5">
+                <p className="eyebrow mb-3">Article Body Images</p>
+                <h2 className="display text-3xl font-semibold text-[#fff1d7]">In-post visuals</h2>
+              </div>
+
+              <div className="space-y-4">
+                {article.bodyImages.length > 0 ? (
+                  <div className="grid gap-3">
+                    {article.bodyImages.map((bodyImage) => (
+                      <div className="rounded-[1.2rem] border border-[var(--line)] bg-black/10 p-3" key={bodyImage.id}>
+                        <Image
+                          alt={bodyImage.altText}
+                          className="aspect-video w-full rounded-[0.9rem] object-cover"
+                          src={bodyImage.publicPath}
+                          width={FEATURED_IMAGE_WIDTH}
+                          height={FEATURED_IMAGE_HEIGHT}
+                        />
+                        <p className="mt-3 text-sm font-semibold text-[#fff4e1]">
+                          {bodyImage.sectionHeading}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{bodyImage.altText}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-4 py-10 text-center text-[var(--muted)]">
+                    No article body images generated yet.
+                  </div>
+                )}
+
+                {imageRecovery.bodyImages.reason === "failed" ? (
+                  <div className="message message-error">
+                    <p className="font-semibold text-[#fff4e1]">
+                      Article body image generation failed.
+                    </p>
+                    <p className="mt-1 text-sm leading-6">
+                      Pick how many in-post images you want and retry with the selected generator.
+                    </p>
+                    <button
+                      className="action-primary mt-3 w-full"
+                      formAction={regenerateArticleBodyImagesAction.bind(null, article.id)}
+                      type="submit"
+                    >
+                      Retry Body Images
+                    </button>
+                  </div>
+                ) : null}
+
+                <div>
+                  <label className="label" htmlFor="bodyImageCount">
+                    Images Inside Article
+                  </label>
+                  <select
+                    className="field"
+                    defaultValue={bodyImageDefaultCount}
+                    id="bodyImageCount"
+                    name="bodyImageCount"
+                  >
+                    {Array.from({ length: MAX_ARTICLE_BODY_IMAGE_COUNT + 1 }, (_, count) => (
+                      <option key={count} value={count}>
+                        {count}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="label" htmlFor="bodyImageProvider">
+                    Body Image Generator
+                  </label>
+                  <select
+                    className="field"
+                    defaultValue={DEFAULT_FEATURED_IMAGE_PROVIDER}
+                    id="bodyImageProvider"
+                    name="bodyImageProvider"
+                    required
+                  >
+                    {FEATURED_IMAGE_PROVIDER_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="label" htmlFor="bodyImageFalModel">
+                    Body fal.ai Model
+                  </label>
+                  <select
+                    className="field"
+                    defaultValue={DEFAULT_FAL_IMAGE_MODEL}
+                    id="bodyImageFalModel"
+                    name="bodyImageFalModel"
+                    required
+                  >
+                    {FAL_IMAGE_MODEL_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="label" htmlFor="bodyOpenAiImageModel">
+                    Body GPT Image Model
+                  </label>
+                  <select
+                    className="field"
+                    defaultValue={openAiImageModelDefault}
+                    id="bodyOpenAiImageModel"
+                    name="bodyOpenAiImageModel"
+                    required
+                  >
+                    {OPENAI_IMAGE_MODEL_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  className="action-secondary w-full"
+                  formAction={regenerateArticleBodyImagesAction.bind(null, article.id)}
+                  type="submit"
+                >
+                  Generate / Refresh Body Images
                 </button>
               </div>
             </section>

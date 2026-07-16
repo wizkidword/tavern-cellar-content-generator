@@ -1,10 +1,16 @@
-import { type Article, type Category, type Prisma } from "@prisma/client";
+import {
+  type Article,
+  type ArticleBodyImage,
+  type Category,
+  type Prisma,
+} from "@prisma/client";
 import { marked } from "marked";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { prisma } from "@/lib/db";
 import { getServerEnv, requireWordPressAuthEnv } from "@/lib/env";
+import { isAllowedAppCategorySlug } from "@/lib/category-config";
 import {
   buildCanonicalTopicKey,
   normalizeTopicValue,
@@ -23,6 +29,7 @@ type WordPressCategoryRecord = {
 type WordPressPostRecord = {
   id: number;
   date: string;
+  date_gmt?: string;
   slug: string;
   link: string;
   status?: string;
@@ -35,6 +42,28 @@ type WordPressPostEditRecord = {
   id: number;
   meta?: Record<string, unknown>;
   yoast_head?: string;
+};
+
+type WordPressMediaRecord = {
+  id: number;
+  source_url?: string;
+};
+
+type FeaturedMediaInfo = {
+  id: number;
+  sourceUrl: string | null;
+};
+
+type BodyMediaInfo = {
+  publicPath: string;
+  mediaId: number;
+  sourceUrl: string;
+  altText: string;
+};
+
+export type WordPressScheduledPostTime = {
+  wpPostId: number;
+  date: Date;
 };
 
 function wordpressApiUrl(pathname: string) {
@@ -63,6 +92,20 @@ function clampText(value: string, maxLength: number) {
   return normalized.slice(0, maxLength).trim();
 }
 
+function summarizeWordPressErrorBody(rawBody: string, contentType: string | null) {
+  const looksLikeHtml =
+    contentType?.toLowerCase().includes("text/html") ||
+    /<\s*!doctype\s+html|<\s*html[\s>]/i.test(rawBody);
+
+  if (looksLikeHtml) {
+    return "WordPress returned an HTML error page instead of a compact REST API error. Check WordPress hosting, firewall, or security plugin rules for the REST media endpoint.";
+  }
+
+  const plainText = clampText(stripHtml(rawBody), 240);
+
+  return plainText || null;
+}
+
 function stripRawMarkdownHtml(value: string) {
   return value
     .replace(/<!--[\s\S]*?-->/g, "")
@@ -70,6 +113,117 @@ function stripRawMarkdownHtml(value: string) {
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<\/?[a-z][a-z0-9:-]*(?:\s+[^<>]*)?>/gi, "")
     .trim();
+}
+
+function escapeHtmlAttribute(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function sourceUrlFromMedia(media: WordPressMediaRecord) {
+  const sourceUrl = media.source_url?.trim();
+
+  return sourceUrl || null;
+}
+
+function buildFeaturedImageBlockHtml(input: {
+  mediaId: number;
+  sourceUrl: string;
+  altText: string;
+}) {
+  const sourceUrl = input.sourceUrl.trim();
+
+  if (!sourceUrl) {
+    return "";
+  }
+
+  const blockAttributes = JSON.stringify({
+    id: input.mediaId,
+    sizeSlug: "full",
+    linkDestination: "none",
+  });
+
+  return [
+    `<!-- wp:image ${blockAttributes} -->`,
+    `<figure class="wp-block-image size-full"><img src="${escapeHtmlAttribute(
+      sourceUrl,
+    )}" alt="${escapeHtmlAttribute(input.altText.trim())}" class="wp-image-${input.mediaId}"/></figure>`,
+    "<!-- /wp:image -->",
+  ].join("\n");
+}
+
+function replaceBodyImageMarkdownWithBlocks(
+  contentMarkdown: string,
+  bodyImages: Array<{
+    publicPath: string;
+    mediaId: number;
+    sourceUrl: string;
+    altText: string;
+  }>,
+) {
+  if (bodyImages.length === 0) {
+    return contentMarkdown;
+  }
+
+  const imagesByPath = new Map(
+    bodyImages
+      .filter((image) => image.publicPath.trim() && image.sourceUrl.trim())
+      .map((image) => [image.publicPath.trim(), image]),
+  );
+
+  if (imagesByPath.size === 0) {
+    return contentMarkdown;
+  }
+
+  return contentMarkdown
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = /^!\[[^\]]*\]\(([^)]+)\)\s*$/.exec(line.trim());
+      const image = match ? imagesByPath.get(match[1].trim()) : null;
+
+      if (!image) {
+        return line;
+      }
+
+      return buildFeaturedImageBlockHtml({
+        mediaId: image.mediaId,
+        sourceUrl: image.sourceUrl,
+        altText: image.altText,
+      });
+    })
+    .join("\n");
+}
+
+export async function buildWordPressPostContentHtml(input: {
+  contentMarkdown: string;
+  featuredImage: {
+    mediaId: number;
+    sourceUrl: string;
+    altText: string;
+  } | null;
+  bodyImages?: Array<{
+    publicPath: string;
+    mediaId: number;
+    sourceUrl: string;
+    altText: string;
+  }>;
+}) {
+  const contentWithBodyImages = replaceBodyImageMarkdownWithBlocks(
+    stripRawMarkdownHtml(input.contentMarkdown),
+    input.bodyImages ?? [],
+  );
+  const htmlContent = await marked.parse(contentWithBodyImages);
+
+  if (!input.featuredImage?.sourceUrl.trim()) {
+    return htmlContent;
+  }
+
+  const imageBlock = buildFeaturedImageBlockHtml(input.featuredImage);
+
+  return imageBlock ? `${imageBlock}\n\n${htmlContent}` : htmlContent;
 }
 
 type WordPressErrorPayload = {
@@ -112,7 +266,9 @@ async function buildWordPressError(prefix: string, response: Response) {
   }
 
   if (rawBody) {
-    return new Error(`${fallback} ${rawBody}`);
+    const bodySummary = summarizeWordPressErrorBody(rawBody, response.headers.get("content-type"));
+
+    return new Error(bodySummary ? `${fallback}. ${bodySummary}` : fallback);
   }
 
   return new Error(fallback);
@@ -135,6 +291,26 @@ export async function fetchWordPressCategories() {
   return fetchJson<WordPressCategoryRecord[]>(
     wordpressApiUrl("/categories?per_page=100&_fields=id,count,description,name,slug"),
   );
+}
+
+function buildWordPressCategoryPayload(input: {
+  name: string;
+  slug?: string | null;
+  description?: string | null;
+}) {
+  const name = input.name.trim();
+  const slug = input.slug?.trim();
+  const description = input.description?.trim();
+
+  if (!name) {
+    throw new Error("Category name is required.");
+  }
+
+  return {
+    name,
+    ...(slug ? { slug } : {}),
+    ...(description ? { description } : {}),
+  };
 }
 
 function buildBasicAuthHeaders(
@@ -172,7 +348,7 @@ async function fetchPostsPage(input: {
     : "";
   const response = await fetch(
     wordpressApiUrl(
-      `/posts?per_page=100&page=${input.page}${statusParam}&_fields=id,date,slug,link,categories,title,excerpt,status`,
+      `/posts?per_page=100&page=${input.page}${statusParam}&_fields=id,date,date_gmt,slug,link,categories,title,excerpt,status`,
     ),
     {
       cache: "no-store",
@@ -181,6 +357,32 @@ async function fetchPostsPage(input: {
   );
 
   return response;
+}
+
+export function parseWordPressScheduledDate(input: {
+  date?: string | null;
+  date_gmt?: string | null;
+}) {
+  const dateGmt = input.date_gmt?.trim();
+
+  if (dateGmt) {
+    const normalized = dateGmt.endsWith("Z") ? dateGmt : `${dateGmt}Z`;
+    const parsedGmt = new Date(normalized);
+
+    if (!Number.isNaN(parsedGmt.getTime())) {
+      return parsedGmt;
+    }
+  }
+
+  const date = input.date?.trim();
+
+  if (!date) {
+    return null;
+  }
+
+  const parsedDate = new Date(date);
+
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
 }
 
 export async function fetchAllWordPressPosts() {
@@ -219,27 +421,66 @@ export async function fetchAllWordPressPosts() {
   return allPosts;
 }
 
+export async function fetchScheduledWordPressPostTimes(
+  options: {
+    excludeWpPostId?: number | null;
+    now?: Date;
+  } = {},
+) {
+  const authHeaders = createOptionalAuthHeaders();
+
+  if (!authHeaders) {
+    throw new Error(
+      "Add WordPress credentials before random scheduling so existing scheduled posts can be checked.",
+    );
+  }
+
+  const scheduledTimes: WordPressScheduledPostTime[] = [];
+  const now = options.now ?? new Date();
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages) {
+    const response = await fetchPostsPage({
+      page,
+      includePrivateStatuses: true,
+      authHeaders,
+    });
+
+    if (!response.ok) {
+      throw new Error(`WordPress scheduled posts check failed on page ${page}.`);
+    }
+
+    totalPages = Number(response.headers.get("X-WP-TotalPages") ?? "1");
+    const batch = (await response.json()) as WordPressPostRecord[];
+
+    for (const post of batch) {
+      if (post.status !== "future" || post.id === options.excludeWpPostId) {
+        continue;
+      }
+
+      const scheduledDate = parseWordPressScheduledDate(post);
+
+      if (scheduledDate && scheduledDate.getTime() > now.getTime()) {
+        scheduledTimes.push({
+          wpPostId: post.id,
+          date: scheduledDate,
+        });
+      }
+    }
+
+    page += 1;
+  }
+
+  return scheduledTimes;
+}
+
 export async function syncWordPressCatalog() {
   const categories = await fetchWordPressCategories();
   const syncedAt = new Date();
 
   for (const category of categories) {
-    await prisma.category.upsert({
-      where: { wpCategoryId: category.id },
-      create: {
-        wpCategoryId: category.id,
-        name: category.name,
-        slug: category.slug,
-        description: category.description || null,
-        postCount: category.count,
-      },
-      update: {
-        name: category.name,
-        slug: category.slug,
-        description: category.description || null,
-        postCount: category.count,
-      },
-    });
+    await upsertWordPressCategoryRecord(category);
   }
 
   const storedCategories = await prisma.category.findMany();
@@ -301,6 +542,60 @@ export async function syncWordPressCatalog() {
 function createAuthHeaders(contentType = "application/json") {
   const env = requireWordPressAuthEnv();
   return buildBasicAuthHeaders(env.WORDPRESS_USERNAME, env.WORDPRESS_APP_PASSWORD, contentType);
+}
+
+async function upsertWordPressCategoryRecord(
+  category: WordPressCategoryRecord,
+  options: { isActive?: boolean } = {},
+) {
+  const isActive = options.isActive ?? isAllowedAppCategorySlug(category.slug);
+
+  return prisma.category.upsert({
+    where: { wpCategoryId: category.id },
+    create: {
+      wpCategoryId: category.id,
+      name: category.name,
+      slug: category.slug,
+      description: category.description || null,
+      postCount: category.count,
+      isActive,
+    },
+    update: {
+      name: category.name,
+      slug: category.slug,
+      description: category.description || null,
+      postCount: category.count,
+      ...(options.isActive === undefined ? {} : { isActive }),
+    },
+  });
+}
+
+export async function createWordPressCategory(input: {
+  name: string;
+  slug?: string | null;
+  description?: string | null;
+}) {
+  const response = await fetch(wordpressApiUrl("/categories"), {
+    method: "POST",
+    headers: createAuthHeaders(),
+    body: JSON.stringify(buildWordPressCategoryPayload(input)),
+  });
+
+  if (!response.ok) {
+    throw await buildWordPressError("WordPress category creation failed", response);
+  }
+
+  return (await response.json()) as WordPressCategoryRecord;
+}
+
+export async function createWordPressCategoryAndSync(input: {
+  name: string;
+  slug?: string | null;
+  description?: string | null;
+}) {
+  const category = await createWordPressCategory(input);
+
+  return upsertWordPressCategoryRecord(category, { isActive: true });
 }
 
 async function getOrCreateTagIds(tagsValue: string) {
@@ -388,7 +683,7 @@ function buildMediaMetadata(article: Article) {
   };
 }
 
-async function syncFeaturedMediaMetadata(mediaId: number, article: Article) {
+async function syncFeaturedMediaMetadata(mediaId: number, article: Article): Promise<FeaturedMediaInfo> {
   const response = await fetch(wordpressApiUrl(`/media/${mediaId}`), {
     method: "POST",
     headers: createAuthHeaders(),
@@ -398,11 +693,18 @@ async function syncFeaturedMediaMetadata(mediaId: number, article: Article) {
   if (!response.ok) {
     throw await buildWordPressError("Media metadata sync failed", response);
   }
+
+  const media = (await response.json()) as WordPressMediaRecord;
+
+  return {
+    id: media.id,
+    sourceUrl: sourceUrlFromMedia(media),
+  };
 }
 
-async function uploadFeaturedMedia(article: Article) {
+async function uploadFeaturedMedia(article: Article): Promise<FeaturedMediaInfo | null> {
   if (!article.featuredImagePath || article.wpMediaId) {
-    return article.wpMediaId ?? null;
+    return article.wpMediaId ? { id: article.wpMediaId, sourceUrl: null } : null;
   }
 
   const filePath = path.join(process.cwd(), "public", article.featuredImagePath.replace(/^\//, ""));
@@ -421,37 +723,189 @@ async function uploadFeaturedMedia(article: Article) {
     throw await buildWordPressError("Media upload failed", response);
   }
 
-  const media = (await response.json()) as { id: number };
+  const media = (await response.json()) as WordPressMediaRecord;
   await prisma.article.update({
     where: { id: article.id },
     data: { wpMediaId: media.id },
   });
 
-  return media.id;
+  return {
+    id: media.id,
+    sourceUrl: sourceUrlFromMedia(media),
+  };
+}
+
+function buildBodyMediaMetadata(article: Article, image: ArticleBodyImage) {
+  const safeTitle = clampText(stripHtml(`${article.title} - ${image.sectionHeading}`), 120);
+  const safeAltText = clampText(stripHtml(image.altText), 220);
+  const safeCaption = clampText(stripHtml(`Image for "${image.sectionHeading}".`), 220);
+  const safeDescription = clampText(
+    stripHtml(`Supporting image for "${article.title}" in the section "${image.sectionHeading}".`),
+    320,
+  );
+
+  return {
+    alt_text: safeAltText,
+    title: safeTitle,
+    caption: safeCaption,
+    description: safeDescription,
+  };
+}
+
+async function syncBodyMediaMetadata(
+  mediaId: number,
+  article: Article,
+  image: ArticleBodyImage,
+): Promise<FeaturedMediaInfo> {
+  const response = await fetch(wordpressApiUrl(`/media/${mediaId}`), {
+    method: "POST",
+    headers: createAuthHeaders(),
+    body: JSON.stringify(buildBodyMediaMetadata(article, image)),
+  });
+
+  if (!response.ok) {
+    throw await buildWordPressError("Body image metadata sync failed", response);
+  }
+
+  const media = (await response.json()) as WordPressMediaRecord;
+
+  return {
+    id: media.id,
+    sourceUrl: sourceUrlFromMedia(media),
+  };
+}
+
+async function uploadBodyMedia(article: Article, image: ArticleBodyImage): Promise<BodyMediaInfo | null> {
+  let mediaId = image.wpMediaId;
+
+  if (!mediaId) {
+    const filePath = path.join(process.cwd(), "public", image.publicPath.replace(/^\//, ""));
+    const fileBuffer = await fs.readFile(filePath);
+    const filename = path.basename(filePath);
+    const response = await fetch(wordpressApiUrl("/media"), {
+      method: "POST",
+      headers: {
+        ...createAuthHeaders(image.mimeType),
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+      body: fileBuffer,
+    });
+
+    if (!response.ok) {
+      throw await buildWordPressError("Body image upload failed", response);
+    }
+
+    const media = (await response.json()) as WordPressMediaRecord;
+    mediaId = media.id;
+    await prisma.articleBodyImage.update({
+      where: { id: image.id },
+      data: { wpMediaId: media.id },
+    });
+  }
+
+  const syncedMedia = await syncBodyMediaMetadata(mediaId, article, image);
+
+  if (!syncedMedia.sourceUrl) {
+    return null;
+  }
+
+  return {
+    publicPath: image.publicPath,
+    mediaId,
+    sourceUrl: syncedMedia.sourceUrl,
+    altText: image.altText,
+  };
+}
+
+async function uploadBodyMediaImages(
+  article: Article & { bodyImages?: ArticleBodyImage[] },
+) {
+  const images = article.bodyImages ?? [];
+  const uploaded: BodyMediaInfo[] = [];
+
+  for (const image of images) {
+    const media = await uploadBodyMedia(article, image);
+
+    if (media) {
+      uploaded.push(media);
+    }
+  }
+
+  return uploaded;
 }
 
 type PublishMode = "draft" | "publish" | "future";
 
 type WordPressSchedule = {
   localDateTime: string;
+  utcDateTime: Date;
 };
 
 function toWordPressLocalDateTime(value: string) {
   return value.length === 16 ? `${value}:00` : value;
 }
 
-export async function pushArticleToWordPress(
-  article: Article & { category: Category },
-  mode: PublishMode,
-  schedule?: WordPressSchedule | null,
-) {
-  const mediaId = await uploadFeaturedMedia(article);
+function toWordPressUtcDateTime(value: Date) {
+  return [
+    value.getUTCFullYear(),
+    String(value.getUTCMonth() + 1).padStart(2, "0"),
+    String(value.getUTCDate()).padStart(2, "0"),
+  ].join("-") + `T${[
+    String(value.getUTCHours()).padStart(2, "0"),
+    String(value.getUTCMinutes()).padStart(2, "0"),
+    String(value.getUTCSeconds()).padStart(2, "0"),
+  ].join(":")}`;
+}
 
-  if (mediaId) {
-    await syncFeaturedMediaMetadata(mediaId, article);
+export function buildWordPressPostTimingFields(input: {
+  mode: PublishMode;
+  schedule?: WordPressSchedule | null;
+  publishAt?: Date | null;
+}) {
+  const fields: Record<string, string> = {};
+
+  if (input.mode === "future" && input.schedule) {
+    fields.date = toWordPressLocalDateTime(input.schedule.localDateTime);
+    fields.date_gmt = toWordPressUtcDateTime(input.schedule.utcDateTime);
   }
 
-  const htmlContent = await marked.parse(stripRawMarkdownHtml(article.contentMarkdown));
+  if (input.mode === "publish" && input.publishAt) {
+    fields.date_gmt = toWordPressUtcDateTime(input.publishAt);
+  }
+
+  return fields;
+}
+
+export async function pushArticleToWordPress(
+  article: Article & { category: Category; bodyImages?: ArticleBodyImage[] },
+  mode: PublishMode,
+  schedule?: WordPressSchedule | null,
+  options: { publishAt?: Date | null } = {},
+) {
+  const uploadedMedia = await uploadFeaturedMedia(article);
+  const bodyImages = await uploadBodyMediaImages(article);
+  let featuredMedia = uploadedMedia;
+
+  if (uploadedMedia) {
+    const syncedMedia = await syncFeaturedMediaMetadata(uploadedMedia.id, article);
+    featuredMedia = {
+      id: uploadedMedia.id,
+      sourceUrl: syncedMedia.sourceUrl ?? uploadedMedia.sourceUrl,
+    };
+  }
+
+  const htmlContent = await buildWordPressPostContentHtml({
+    contentMarkdown: article.contentMarkdown,
+    featuredImage:
+      featuredMedia?.sourceUrl
+        ? {
+            mediaId: featuredMedia.id,
+            sourceUrl: featuredMedia.sourceUrl,
+            altText: article.featuredImageAlt,
+          }
+        : null,
+    bodyImages,
+  });
   const tagIds = await getOrCreateTagIds(article.tags);
 
   const body: Record<string, Prisma.JsonValue | string | number | number[] | null> = {
@@ -462,17 +916,21 @@ export async function pushArticleToWordPress(
     categories: [article.category.wpCategoryId],
     tags: tagIds,
     status: mode,
-    featured_media: mediaId,
+    featured_media: featuredMedia?.id ?? null,
     meta: {
       _yoast_wpseo_title: article.metaTitle,
       _yoast_wpseo_metadesc: article.metaDescription,
       _yoast_wpseo_focuskw: article.primaryKeyword,
     },
   };
-
-  if (mode === "future" && schedule) {
-    body.date = toWordPressLocalDateTime(schedule.localDateTime);
-  }
+  Object.assign(
+    body,
+    buildWordPressPostTimingFields({
+      mode,
+      schedule,
+      publishAt: options.publishAt,
+    }),
+  );
 
   const endpoint = article.wpPostId
     ? wordpressApiUrl(`/posts/${article.wpPostId}`)

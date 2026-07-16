@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import {
   buildOpportunityGenerationNotes,
   buildOpportunityInsight,
+  canDeleteOpportunity,
   canGenerateOpportunityDraft,
+  getOpportunityWorkflowState,
 } from "@/lib/intelligence/opportunities";
 import { parseContentOpportunityIdeasPayload } from "@/lib/openai";
 
@@ -106,6 +108,43 @@ test("allows draft generation only from idea or approved opportunities", () => {
   assert.equal(canGenerateOpportunityDraft("ARCHIVED"), false);
 });
 
+test("allows deleting known opportunity records from the queue", () => {
+  assert.equal(canDeleteOpportunity("IDEA"), true);
+  assert.equal(canDeleteOpportunity("APPROVED"), true);
+  assert.equal(canDeleteOpportunity("GENERATED"), true);
+  assert.equal(canDeleteOpportunity("REJECTED"), true);
+  assert.equal(canDeleteOpportunity("ARCHIVED"), true);
+  assert.equal(canDeleteOpportunity("MIGRATING"), false);
+});
+
+test("shows generated opportunities as openable drafts instead of disabled generation work", () => {
+  assert.deepEqual(
+    getOpportunityWorkflowState({
+      status: "GENERATED",
+      generatedArticleId: "article-123",
+    }),
+    {
+      mode: "open_generated_draft",
+      message: "This opportunity already has a generated draft.",
+      canGenerateDraft: false,
+    },
+  );
+});
+
+test("keeps idea and approved opportunities ready for draft generation", () => {
+  assert.deepEqual(
+    getOpportunityWorkflowState({
+      status: "IDEA",
+      generatedArticleId: null,
+    }),
+    {
+      mode: "generate_draft",
+      message: "This opportunity is ready to generate a draft.",
+      canGenerateDraft: true,
+    },
+  );
+});
+
 test("validates AI opportunity ideas without accepting invented links", () => {
   const opportunities = parseContentOpportunityIdeasPayload({
     opportunities: [
@@ -153,4 +192,40 @@ test("validates AI opportunity ideas without accepting invented links", () => {
       }),
     /invalid opportunity ideas/i,
   );
+});
+
+test("expands short AI opportunity angle labels from the brief", () => {
+  const opportunities = parseContentOpportunityIdeasPayload({
+    opportunities: [
+      {
+        primaryKeyword: "Sonic the Hedgehog Sega Genesis",
+        angle: "First play",
+        brief:
+          "Frame Sonic the Hedgehog as a first-time player review of speed, level flow, Green Hill Zone readability, and why the Genesis mascot still works for modern retro-curious readers.",
+      },
+      {
+        primaryKeyword: "Redneck Rampage MS-DOS",
+        angle: "Looking back",
+        brief:
+          "Use Redneck Rampage on MS-DOS as a looking-back piece about crude humor, Build engine design, late-1990s PC shooter culture, and what feels charming or rough today.",
+      },
+      {
+        primaryKeyword: "Super Mario Bros NES",
+        angle: "1985 review",
+        brief:
+          "Revisit Super Mario Bros. on NES as a design breakdown of movement, stage rhythm, secrets, and why its first-world lessons still define platformers.",
+      },
+    ],
+  });
+
+  assert.equal(opportunities.length, 3);
+  assert.ok(opportunities[0]);
+  assert.ok(opportunities[1]);
+  assert.ok(opportunities[2]);
+  assert.ok(opportunities[0].angle.length >= 20);
+  assert.ok(opportunities[1].angle.length >= 20);
+  assert.ok(opportunities[2].angle.length >= 20);
+  assert.match(opportunities[0].angle, /Sonic the Hedgehog|first-time player/i);
+  assert.match(opportunities[1].angle, /Redneck Rampage|looking-back/i);
+  assert.match(opportunities[2].angle, /Super Mario Bros|design breakdown/i);
 });

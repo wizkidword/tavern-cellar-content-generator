@@ -244,6 +244,43 @@ button:disabled {
     0 0 0 6px rgba(213, 139, 51, 0.3);
 }
 
+.action-danger {
+  border-radius: 999px;
+  border: 1px solid rgba(209, 119, 98, 0.56);
+  background: rgba(209, 119, 98, 0.12);
+  color: #ffe6dd;
+  font-weight: 700;
+  padding: 0.92rem 1.2rem;
+  outline: none;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.action-danger:hover {
+  border-color: rgba(255, 151, 126, 0.9);
+  background: rgba(209, 119, 98, 0.22);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 185, 168, 0.16),
+    0 10px 28px rgba(209, 119, 98, 0.18);
+  color: #fff4f0;
+  transform: translateY(-2px);
+}
+
+.action-danger:active {
+  transform: translateY(0);
+}
+
+.action-danger:focus-visible {
+  border-color: rgba(255, 244, 225, 0.8);
+  box-shadow:
+    0 0 0 3px rgba(255, 244, 225, 0.2),
+    0 0 0 6px rgba(209, 119, 98, 0.34);
+}
+
 .eyebrow {
   color: #c79f6a;
   font-size: 0.8rem;

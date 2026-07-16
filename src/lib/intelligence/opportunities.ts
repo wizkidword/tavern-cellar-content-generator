@@ -1,8 +1,17 @@
 import { Prisma } from "@prisma/client";
 
-import { isAllowedAppCategorySlug } from "@/lib/category-config";
+import { isActiveAppCategory } from "@/lib/category-config";
 import { createArticle } from "@/lib/content-pipeline";
 import { prisma } from "@/lib/db";
+import {
+  buildGameOfThronesEpisodeGuideOpportunities,
+  buildGameOfThronesFanoutGuidance,
+  isGameOfThronesUniverseCategory,
+} from "@/lib/franchise-episode-guides";
+import {
+  buildRetroGamesStrategyGuidance,
+  isRetroGamesCategory,
+} from "@/lib/retro-games";
 import { buildCoverageMap, type CoverageBalanceLabel } from "@/lib/intelligence/coverage";
 import {
   assessDuplicateRisk,
@@ -18,7 +27,13 @@ import {
   scoreOpportunity,
   type OpportunityScoreBreakdown,
 } from "@/lib/intelligence/opportunity-scoring";
+import {
+  type FalImageModel,
+  type FeaturedImageProvider,
+  type OpenAIImageModel,
+} from "@/lib/featured-image";
 import { generateContentOpportunityIdeas } from "@/lib/openai";
+import { type OpenAITextModel } from "@/lib/openai-models";
 import { normalizeTopicValue } from "@/lib/topic-utils";
 
 type BuildOpportunityInsightInput = {
@@ -54,6 +69,14 @@ type OpportunityGenerationLink = {
 };
 
 type MutableOpportunityStatus = "APPROVED" | "REJECTED" | "ARCHIVED";
+
+const deletableOpportunityStatuses = new Set([
+  "IDEA",
+  "APPROVED",
+  "GENERATED",
+  "REJECTED",
+  "ARCHIVED",
+]);
 
 const opportunityInclude = {
   category: true,
@@ -195,6 +218,37 @@ export function canGenerateOpportunityDraft(status: string) {
   return status === "IDEA" || status === "APPROVED";
 }
 
+export function canDeleteOpportunity(status: string) {
+  return deletableOpportunityStatuses.has(status);
+}
+
+export function getOpportunityWorkflowState(input: {
+  status: string;
+  generatedArticleId?: string | null;
+}) {
+  if (input.status === "GENERATED" && input.generatedArticleId) {
+    return {
+      mode: "open_generated_draft" as const,
+      message: "This opportunity already has a generated draft.",
+      canGenerateDraft: false,
+    };
+  }
+
+  if (canGenerateOpportunityDraft(input.status)) {
+    return {
+      mode: "generate_draft" as const,
+      message: "This opportunity is ready to generate a draft.",
+      canGenerateDraft: true,
+    };
+  }
+
+  return {
+    mode: "locked" as const,
+    message: "Change this opportunity back to idea or approved before generating a draft.",
+    canGenerateDraft: false,
+  };
+}
+
 export function buildOpportunityGenerationNotes(input: {
   brief: string;
   overallScore: number;
@@ -223,6 +277,32 @@ export async function updateOpportunityStatus(
     data: { status },
     include: opportunityInclude,
   });
+}
+
+export async function deleteOpportunity(opportunityId: string) {
+  const opportunity = await prisma.contentOpportunity.findUnique({
+    where: { id: opportunityId },
+    select: {
+      id: true,
+      primaryKeyword: true,
+      status: true,
+      generatedArticleId: true,
+    },
+  });
+
+  if (!opportunity) {
+    throw new Error("Opportunity not found.");
+  }
+
+  if (!canDeleteOpportunity(opportunity.status)) {
+    throw new Error("This opportunity status cannot be deleted yet.");
+  }
+
+  await prisma.contentOpportunity.delete({
+    where: { id: opportunityId },
+  });
+
+  return opportunity;
 }
 
 async function findExistingOpportunity(input: {
@@ -292,7 +372,7 @@ export async function createOpportunityFromInput(input: CreateOpportunityInput) 
     }),
   ]);
 
-  if (!category || !isAllowedAppCategorySlug(category.slug)) {
+  if (!category || !isActiveAppCategory(category)) {
     throw new Error("Pick one of the active Foundry categories before creating an opportunity.");
   }
 
@@ -483,11 +563,11 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
         categoryId: true,
       },
       orderBy: { updatedAt: "desc" },
-      take: 100,
+      take: 500,
     }),
   ]);
 
-  if (!category || !isAllowedAppCategorySlug(category.slug)) {
+  if (!category || !isActiveAppCategory(category)) {
     throw new Error("Pick one of the active Foundry categories before generating opportunity ideas.");
   }
 
@@ -515,6 +595,10 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
   }));
   const matchingSitePosts = sitePostsWithLocalCategories.filter((post) =>
     post.localCategoryIds.includes(category.id),
+  );
+  const sameCategoryArticles = articles.filter((article) => article.categoryId === category.id);
+  const sameCategoryOpportunities = existingOpportunities.filter(
+    (opportunity) => opportunity.categoryId === category.id,
   );
   const realLinkCandidates = sitePostsWithLocalCategories
     .map((post) => {
@@ -549,16 +633,51 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
       excerpt: candidate.excerpt,
       categoryName: candidate.categoryName,
     }));
+  const gameOfThronesEpisodeGuideIdeas = isGameOfThronesUniverseCategory(category)
+    ? buildGameOfThronesEpisodeGuideOpportunities({
+        existingCoverage: [
+          ...matchingSitePosts.map((post) => `${post.title} ${post.slug}`),
+          ...sameCategoryArticles.map((article) => `${article.title} ${article.angle}`),
+          ...sameCategoryOpportunities.map(
+            (opportunity) => `${opportunity.primaryKeyword} ${opportunity.angle}`,
+          ),
+        ],
+      })
+    : [];
+
+  if (gameOfThronesEpisodeGuideIdeas.length > 0) {
+    const opportunities = [];
+
+    for (const idea of gameOfThronesEpisodeGuideIdeas) {
+      opportunities.push(
+        await createOpportunityFromInput({
+          categoryId: category.id,
+          primaryKeyword: idea.primaryKeyword,
+          angle: idea.angle,
+          brief: idea.brief,
+        }),
+      );
+    }
+
+    return {
+      opportunities,
+      textModel: "local-game-of-thrones-episode-checklist",
+    };
+  }
+
   const ideas = await generateContentOpportunityIdeas({
     categoryName: category.name,
     categorySlug: category.slug,
     coverageSummary: coverageSummary(coverageLane),
+    strategyGuidance: isGameOfThronesUniverseCategory(category)
+      ? buildGameOfThronesFanoutGuidance()
+      : isRetroGamesCategory(category)
+        ? buildRetroGamesStrategyGuidance()
+        : undefined,
     duplicateEvidenceSummaries: duplicateEvidenceSummary({
       sitePosts: matchingSitePosts,
-      articles: articles.filter((article) => article.categoryId === category.id),
-      opportunities: existingOpportunities.filter(
-        (opportunity) => opportunity.categoryId === category.id,
-      ),
+      articles: sameCategoryArticles,
+      opportunities: sameCategoryOpportunities,
     }),
     internalLinkCandidates: realLinkCandidates,
   });
@@ -583,7 +702,14 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
 
 export async function createArticleFromOpportunity(
   opportunityId: string,
-  options: { generateImage: boolean },
+  options: {
+    generateImage: boolean;
+    textModel: OpenAITextModel;
+    imageProvider: FeaturedImageProvider;
+    falImageModel?: FalImageModel;
+    openAiImageModel?: OpenAIImageModel;
+    bodyImageCount?: number;
+  },
 ) {
   const opportunity = await prisma.contentOpportunity.findUnique({
     where: { id: opportunityId },
@@ -620,6 +746,11 @@ export async function createArticleFromOpportunity(
       })),
     }),
     generateImage: options.generateImage,
+    textModel: options.textModel,
+    imageProvider: options.imageProvider,
+    falImageModel: options.falImageModel,
+    openAiImageModel: options.openAiImageModel,
+    bodyImageCount: options.bodyImageCount,
   });
 
   await prisma.contentOpportunity.update({

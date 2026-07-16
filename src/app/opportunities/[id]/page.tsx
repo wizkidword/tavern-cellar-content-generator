@@ -4,12 +4,30 @@ import { notFound } from "next/navigation";
 import {
   approveOpportunityAction,
   archiveOpportunityAction,
+  deleteOpportunityAction,
   generateOpportunityDraftAction,
   rejectOpportunityAction,
 } from "@/app/actions";
+import { DeleteOpportunityButton } from "@/app/opportunities/delete-opportunity-button";
 import { FoundryNav } from "@/app/foundry-nav";
-import { canGenerateOpportunityDraft } from "@/lib/intelligence/opportunities";
+import { MAX_ARTICLE_BODY_IMAGE_COUNT } from "@/lib/article-body-images";
+import {
+  DEFAULT_FAL_IMAGE_MODEL,
+  DEFAULT_FEATURED_IMAGE_PROVIDER,
+  DEFAULT_OPENAI_IMAGE_MODEL,
+  FAL_IMAGE_MODEL_OPTIONS,
+  FEATURED_IMAGE_PROVIDER_OPTIONS,
+  OPENAI_IMAGE_MODEL_OPTIONS,
+} from "@/lib/featured-image-models";
+import {
+  canDeleteOpportunity,
+  getOpportunityWorkflowState,
+} from "@/lib/intelligence/opportunities";
 import { getOpportunityById, parseScoreReasons } from "@/lib/intelligence/read-models";
+import {
+  DEFAULT_OPENAI_TEXT_MODEL,
+  OPENAI_TEXT_MODEL_OPTIONS,
+} from "@/lib/openai-models";
 
 type OpportunityPageProps = {
   params: Promise<{ id: string }>;
@@ -36,7 +54,11 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
   const message = firstValue(query?.message);
   const error = firstValue(query?.error);
   const reasons = parseScoreReasons(opportunity.scoreReasons);
-  const canGenerate = canGenerateOpportunityDraft(opportunity.status);
+  const workflowState = getOpportunityWorkflowState({
+    status: opportunity.status,
+    generatedArticleId: opportunity.generatedArticleId,
+  });
+  const canDelete = canDeleteOpportunity(opportunity.status);
   const scoreItems = [
     ["Overall", opportunity.overallScore],
     ["Brand", opportunity.tavernFitScore],
@@ -170,25 +192,127 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
                   </button>
                 </form>
 
-                <form action={generateOpportunityDraftAction.bind(null, opportunity.id)} className="grid gap-3">
-                  <label className="flex items-center gap-3 rounded-[1rem] border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#f2e7cf]">
-                    <input name="generateImage" type="checkbox" />
-                    Generate featured image after article draft
-                  </label>
-                  <button className="action-primary w-full" disabled={!canGenerate} type="submit">
-                    Generate Draft From Opportunity
-                  </button>
-                </form>
+                {workflowState.mode === "open_generated_draft" && opportunity.generatedArticle ? (
+                  <div className="rounded-[1.3rem] border border-[var(--line)] bg-black/10 p-4">
+                    <p className="text-sm leading-6 text-[var(--muted)]">{workflowState.message}</p>
+                    <Link
+                      className="action-primary mt-3 block text-center"
+                      href={`/articles/${opportunity.generatedArticle.id}`}
+                    >
+                      Open Generated Draft
+                    </Link>
+                  </div>
+                ) : null}
 
-                {opportunity.generatedArticle ? (
-                  <Link className="action-primary text-center" href={`/articles/${opportunity.generatedArticle.id}`}>
-                    Open Generated Draft
-                  </Link>
-                ) : (
-                  <Link className="action-secondary text-center" href="/opportunities">
-                    Back to Opportunities
-                  </Link>
-                )}
+                {workflowState.mode === "generate_draft" ? (
+                  <form action={generateOpportunityDraftAction.bind(null, opportunity.id)} className="grid gap-3">
+                    <p className="text-sm leading-6 text-[var(--muted)]">{workflowState.message}</p>
+                    <div>
+                      <label className="label" htmlFor="textModel">
+                        AI Draft Model
+                      </label>
+                      <select
+                        className="field"
+                        defaultValue={DEFAULT_OPENAI_TEXT_MODEL}
+                        id="textModel"
+                        name="textModel"
+                        required
+                      >
+                        {OPENAI_TEXT_MODEL_OPTIONS.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-3 rounded-[1rem] border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#f2e7cf]">
+                      <input name="generateImage" type="checkbox" />
+                      Generate featured image after article draft
+                    </label>
+                    <div>
+                      <label className="label" htmlFor="bodyImageCount">
+                        Images Inside Article
+                      </label>
+                      <select className="field" defaultValue="0" id="bodyImageCount" name="bodyImageCount">
+                        {Array.from({ length: MAX_ARTICLE_BODY_IMAGE_COUNT + 1 }, (_, count) => (
+                          <option key={count} value={count}>
+                            {count}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label" htmlFor="imageProvider">
+                        Image Generator
+                      </label>
+                      <select
+                        className="field"
+                        defaultValue={DEFAULT_FEATURED_IMAGE_PROVIDER}
+                        id="imageProvider"
+                        name="imageProvider"
+                        required
+                      >
+                        {FEATURED_IMAGE_PROVIDER_OPTIONS.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label" htmlFor="falImageModel">
+                        fal.ai Model
+                      </label>
+                      <select
+                        className="field"
+                        defaultValue={DEFAULT_FAL_IMAGE_MODEL}
+                        id="falImageModel"
+                        name="falImageModel"
+                        required
+                      >
+                        {FAL_IMAGE_MODEL_OPTIONS.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label" htmlFor="openAiImageModel">
+                        GPT Image Model
+                      </label>
+                      <select
+                        className="field"
+                        defaultValue={DEFAULT_OPENAI_IMAGE_MODEL}
+                        id="openAiImageModel"
+                        name="openAiImageModel"
+                        required
+                      >
+                        {OPENAI_IMAGE_MODEL_OPTIONS.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button className="action-primary w-full" type="submit">
+                      Generate Draft From Opportunity
+                    </button>
+                  </form>
+                ) : null}
+
+                {workflowState.mode === "locked" ? (
+                  <p className="message message-error">{workflowState.message}</p>
+                ) : null}
+
+                <Link className="action-secondary text-center" href="/opportunities">
+                  Back to Opportunities
+                </Link>
+                {workflowState.mode === "open_generated_draft" && !opportunity.generatedArticle ? (
+                  <p className="message message-error">
+                    This opportunity is marked generated, but the saved draft could not be found.
+                  </p>
+                ) : null}
                 <Link className="action-secondary text-center" href="/intelligence">
                   View Coverage Map
                 </Link>
@@ -205,6 +329,12 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
                     </button>
                   </form>
                 </div>
+                {canDelete ? (
+                  <DeleteOpportunityButton
+                    deleteAction={deleteOpportunityAction.bind(null, opportunity.id)}
+                    opportunityName={opportunity.primaryKeyword}
+                  />
+                ) : null}
               </div>
             </section>
           </aside>

@@ -35,6 +35,7 @@ model Category {
   name                 String
   slug                 String               @unique
   description          String?
+  isActive             Boolean              @default(false)
   postCount            Int                  @default(0)
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
@@ -115,7 +116,9 @@ model Article {
   updatedAt                              DateTime      @updatedAt
 
   category                Category                 @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  bodyImages              ArticleBodyImage[]
   contentOpportunities    ContentOpportunity[]
+  modelComparisons        ArticleModelComparison[]
   opportunitySimilarPosts OpportunitySimilarPost[]
   topicClusterItems       TopicClusterItem[]
 
@@ -124,6 +127,61 @@ model Article {
   @@index([status])
   @@index([normalizedTitle])
   @@index([normalizedKeyword])
+}
+
+model ArticleBodyImage {
+  id             String   @id @default(cuid())
+  articleId      String
+  prompt         String
+  altText        String
+  sectionHeading String
+  sortOrder      Int
+  publicPath     String
+  mimeType       String   @default("image/png")
+  imageModel     String
+  wpMediaId      Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@unique([articleId, sortOrder])
+  @@index([articleId])
+}
+
+model ArticleModelComparison {
+  id                                     String   @id @default(cuid())
+  sourceArticleId                        String
+  openAiTextModel                        String
+  title                                  String
+  angle                                  String
+  primaryKeyword                         String
+  slug                                   String
+  contentMarkdown                        String
+  metaTitle                              String
+  metaDescription                        String
+  excerpt                                String
+  tags                                   String
+  internalLinks                          String
+  featuredImagePrompt                    String
+  featuredImageAlt                       String
+  qualityWordCount                       Int      @default(0)
+  qualityHeadingCount                    Int      @default(0)
+  qualityMetaTitleLength                 Int      @default(0)
+  qualityMetaDescriptionLength           Int      @default(0)
+  qualityInternalLinkCount               Int      @default(0)
+  qualityFocusKeyphraseInTitle           Boolean  @default(false)
+  qualityFocusKeyphraseInOpening         Boolean  @default(false)
+  qualityFocusKeyphraseInMetaDescription Boolean  @default(false)
+  qualityWarnings                        String   @default("[]")
+  createdAt                              DateTime @default(now())
+  updatedAt                              DateTime @updatedAt
+
+  sourceArticle Article @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceArticleId, openAiTextModel])
+  @@index([sourceArticleId])
+  @@index([openAiTextModel])
 }
 
 model ContentOpportunity {

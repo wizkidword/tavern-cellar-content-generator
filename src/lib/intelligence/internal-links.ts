@@ -31,6 +31,14 @@ type RecommendInternalLinksInput = {
   limit?: number;
 };
 
+type ResolveGeneratedInternalLinksInput = RecommendInternalLinksInput & {
+  generatedLinksText: string;
+  categoryFallback: {
+    title: string;
+    url: string;
+  };
+};
+
 function clampScore(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
@@ -63,6 +71,12 @@ function statusPenalty(status: string) {
   }
 
   return 10;
+}
+
+function isPublicPostStatus(status: string) {
+  const normalized = status.trim().toLowerCase();
+
+  return normalized === "publish" || normalized === "published";
 }
 
 function buildReason(input: {
@@ -143,4 +157,30 @@ export function recommendInternalLinks(input: RecommendInternalLinksInput) {
     .filter((recommendation): recommendation is InternalLinkRecommendation => Boolean(recommendation))
     .sort((left, right) => right.confidence - left.confidence || left.title.localeCompare(right.title))
     .slice(0, limit);
+}
+
+export function resolveGeneratedInternalLinks(input: ResolveGeneratedInternalLinksInput) {
+  const generatedContext = input.generatedLinksText.trim();
+  const recommendationBrief = [
+    input.brief,
+    generatedContext ? `Generated internal link suggestions:\n${generatedContext}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const recommendations = recommendInternalLinks({
+    keyword: input.keyword,
+    angle: input.angle,
+    brief: recommendationBrief,
+    categoryId: input.categoryId,
+    candidates: input.candidates.filter((candidate) => isPublicPostStatus(candidate.wpStatus)),
+    limit: input.limit,
+  });
+
+  if (recommendations.length === 0) {
+    return `${input.categoryFallback.title.trim()} - ${input.categoryFallback.url.trim()}`;
+  }
+
+  return recommendations
+    .map((recommendation) => `${recommendation.title} - ${recommendation.url}`)
+    .join("\n");
 }

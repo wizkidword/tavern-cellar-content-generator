@@ -4,6 +4,19 @@ import { useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { generateArticleAction } from "@/app/actions";
+import { MAX_ARTICLE_BODY_IMAGE_COUNT } from "@/lib/article-body-images";
+import {
+  DEFAULT_FAL_IMAGE_MODEL,
+  DEFAULT_FEATURED_IMAGE_PROVIDER,
+  DEFAULT_OPENAI_IMAGE_MODEL,
+  FAL_IMAGE_MODEL_OPTIONS,
+  FEATURED_IMAGE_PROVIDER_OPTIONS,
+  OPENAI_IMAGE_MODEL_OPTIONS,
+} from "@/lib/featured-image-models";
+import {
+  DEFAULT_OPENAI_TEXT_MODEL,
+  OPENAI_TEXT_MODEL_OPTIONS,
+} from "@/lib/openai-models";
 
 type CategoryOption = {
   id: number;
@@ -265,6 +278,25 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
 
       {assistError ? <p className="message message-error">{assistError}</p> : null}
 
+      <div>
+        <label className="label" htmlFor="textModel">
+          AI Draft Model
+        </label>
+        <select
+          className="field"
+          defaultValue={DEFAULT_OPENAI_TEXT_MODEL}
+          id="textModel"
+          name="textModel"
+          required
+        >
+          {OPENAI_TEXT_MODEL_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
       <label className="flex items-center gap-3 rounded-2xl border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#eadbbe]">
         <input
           checked={generateImage}
@@ -275,6 +307,76 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
         />
         Generate a featured image before opening the draft.
       </label>
+
+      <div>
+        <label className="label" htmlFor="bodyImageCount">
+          Images Inside Article
+        </label>
+        <select className="field" defaultValue="0" id="bodyImageCount" name="bodyImageCount">
+          {Array.from({ length: MAX_ARTICLE_BODY_IMAGE_COUNT + 1 }, (_, count) => (
+            <option key={count} value={count}>
+              {count}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="label" htmlFor="imageProvider">
+          Image Generator
+        </label>
+        <select
+          className="field"
+          defaultValue={DEFAULT_FEATURED_IMAGE_PROVIDER}
+          id="imageProvider"
+          name="imageProvider"
+          required
+        >
+          {FEATURED_IMAGE_PROVIDER_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="label" htmlFor="falImageModel">
+          fal.ai Model
+        </label>
+        <select
+          className="field"
+          defaultValue={DEFAULT_FAL_IMAGE_MODEL}
+          id="falImageModel"
+          name="falImageModel"
+          required
+        >
+          {FAL_IMAGE_MODEL_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="label" htmlFor="openAiImageModel">
+          GPT Image Model
+        </label>
+        <select
+          className="field"
+          defaultValue={DEFAULT_OPENAI_IMAGE_MODEL}
+          id="openAiImageModel"
+          name="openAiImageModel"
+          required
+        >
+          {OPENAI_IMAGE_MODEL_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <GenerateArticleSubmitButton />
     </form>

@@ -7,7 +7,7 @@ Private SEO content generator for `taverncellar.com`.
 - Syncs Tavern Cellar categories and published-post history from WordPress
 - Tracks every locally generated article so duplicate titles and angles are blocked
 - Generates full article drafts with SEO metadata, tags, internal-link suggestions, and a featured image prompt
-- Optionally generates a featured image asset through OpenAI
+- Optionally generates featured and in-article image assets through fal.ai or OpenAI
 - Supports local review before sending a draft, publishing immediately, or scheduling in WordPress
 - Syncs WordPress tags automatically when pushing drafts or publishing
 
@@ -38,6 +38,10 @@ FOUNDRY_OPERATOR_TOKEN=""
 Important:
 
 - ChatGPT subscriptions and the OpenAI API are separate products, so this app uses the API path rather than a ChatGPT web login.
+- Article draft generation lets you choose `gpt-5.4-nano`, `gpt-5.4-mini`, or `gpt-5.5` before each draft. `OPENAI_TEXT_MODEL` is only the default for helper calls that do not expose a model picker.
+- From an article review page, generate other text models as saved comparison drafts, then open the side-by-side comparison view.
+- OpenAI image generation lets you choose `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, or `gpt-image-1-mini` from the form. `OPENAI_IMAGE_MODEL` is only the environment default.
+- fal.ai image generation can use `fal-ai/flux-2`, `fal-ai/flux-2-pro`, or `fal-ai/flux-2-flex`. `FAL_IMAGE_MODEL` is the default when a screen does not send an explicit model choice.
 - For WordPress publishing, use an application password for the account that should create posts.
 - Leaving spaces in the WordPress application password inside `.env` is fine; the app strips them before authenticating.
 - Foundry allows local `localhost` / `127.0.0.1` use by default. If you expose it remotely, set `FOUNDRY_OPERATOR_TOKEN` and send that value as `x-foundry-operator-token` or a `foundry_operator_token` cookie.
@@ -60,8 +64,9 @@ On Windows, you can also double-click `Launch-Tavern-Cellar-Foundry.bat` from th
 1. Click `Sync Live WordPress History` to pull categories and current post history.
 2. Generate a new article draft from the dashboard.
 3. Review and edit the article on its detail page.
-4. Optionally regenerate the featured image.
-5. Push a WordPress draft, publish immediately, or schedule it.
+4. Optionally generate the other text model for a side-by-side comparison.
+5. Optionally regenerate the featured image.
+6. Push a WordPress draft, publish immediately, or schedule it.
 
 Scheduling stores the local wall-clock time you choose and sends that local time to WordPress, so verify the scheduled post in WordPress after scheduling if your server and WordPress timezone settings ever diverge.
 

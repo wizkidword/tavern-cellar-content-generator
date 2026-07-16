@@ -25,6 +25,8 @@ test("scores article quality signals from deterministic article fields", () => {
       "",
       "## Package design sold the modern morning",
       repeatedWords(260),
+      "",
+      "Which cereal mascot or commercial still sticks with you? Share your thoughts in the comments.",
     ].join("\n"),
     metaTitle: "1950s Cereal Ads And The Postwar Breakfast Pitch",
     metaDescription:
@@ -58,4 +60,67 @@ test("warns when drafts are thin, unlinked, and missing the focus phrase", () =>
   assert.ok(quality.warnings.some((warning) => /focus keyphrase/i.test(warning)));
   assert.deepEqual(parseArticleQualityWarnings(JSON.stringify(quality.warnings)), quality.warnings);
   assert.deepEqual(parseArticleQualityWarnings("not json"), []);
+});
+
+test("warns when drafts do not end with a reader engagement call to action", () => {
+  const quality = analyzeArticleQuality({
+    title: "1950s cereal ads and the postwar breakfast pitch",
+    primaryKeyword: "1950s cereal ads",
+    contentMarkdown: [
+      "1950s cereal ads turned breakfast into a bright promise for busy families.",
+      "",
+      "## Mascots made the pantry feel friendly",
+      repeatedWords(450),
+      "",
+      "## Nutrition claims gave sweetness a scientific costume",
+      repeatedWords(450),
+      "",
+      "## Package design sold the modern morning",
+      repeatedWords(260),
+      "",
+      "That legacy still explains why old cereal commercials remain such durable pop-culture artifacts.",
+    ].join("\n"),
+    metaTitle: "1950s Cereal Ads And The Postwar Breakfast Pitch",
+    metaDescription:
+      "Explore how 1950s cereal ads used mascots, sweetness, convenience, and nutrition claims to sell postwar breakfast culture.",
+    internalLinks: [
+      "https://taverncellar.test/vintage-mascot-advertising/",
+      "https://taverncellar.test/retro-breakfast-commercials/",
+    ].join("\n"),
+  });
+
+  assert.ok(quality.warnings.some((warning) => /share their thoughts/i.test(warning)));
+});
+
+test("accepts drafts that close by asking readers to share their thoughts", () => {
+  const quality = analyzeArticleQuality({
+    title: "1950s cereal ads and the postwar breakfast pitch",
+    primaryKeyword: "1950s cereal ads",
+    contentMarkdown: [
+      "1950s cereal ads turned breakfast into a bright promise for busy families.",
+      "",
+      "## Mascots made the pantry feel friendly",
+      repeatedWords(450),
+      "",
+      "## Nutrition claims gave sweetness a scientific costume",
+      repeatedWords(450),
+      "",
+      "## Package design sold the modern morning",
+      repeatedWords(260),
+      "",
+      "Which cereal mascot or commercial still sticks with you? Share your thoughts in the comments.",
+    ].join("\n"),
+    metaTitle: "1950s Cereal Ads And The Postwar Breakfast Pitch",
+    metaDescription:
+      "Explore how 1950s cereal ads used mascots, sweetness, convenience, and nutrition claims to sell postwar breakfast culture.",
+    internalLinks: [
+      "https://taverncellar.test/vintage-mascot-advertising/",
+      "https://taverncellar.test/retro-breakfast-commercials/",
+    ].join("\n"),
+  });
+
+  assert.equal(
+    quality.warnings.some((warning) => /share their thoughts/i.test(warning)),
+    false,
+  );
 });

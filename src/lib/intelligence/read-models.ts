@@ -1,6 +1,6 @@
 import { ArticleStatus } from "@prisma/client";
 
-import { isAllowedAppCategorySlug, sortCategoriesForApp } from "@/lib/category-config";
+import { isActiveAppCategory, sortCategoriesForApp } from "@/lib/category-config";
 import { prisma } from "@/lib/db";
 import { buildTopicClusterDrafts } from "@/lib/intelligence/clusters";
 import { buildCoverageMap } from "@/lib/intelligence/coverage";
@@ -60,7 +60,7 @@ export async function getIntelligenceData() {
     }),
   ]);
   const categories = sortCategoriesForApp(
-    allCategories.filter((category) => isAllowedAppCategorySlug(category.slug)),
+    allCategories.filter(isActiveAppCategory),
   );
   const lanes = buildCoverageMap({
     categories,
@@ -121,7 +121,7 @@ export async function getOpportunityListData() {
 
   return {
     categories: sortCategoriesForApp(
-      allCategories.filter((category) => isAllowedAppCategorySlug(category.slug)),
+      allCategories.filter(isActiveAppCategory),
     ),
     opportunities,
   };

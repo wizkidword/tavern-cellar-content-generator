@@ -1,7 +1,9 @@
 export const APP_CATEGORY_SLUGS = [
   "horror",
   "the-walking-dead-universe",
+  "the-game-of-thrones-universe",
   "movies",
+  "games",
   "retro-gaming",
   "retro-advertising",
 ] as const;
@@ -12,6 +14,10 @@ const appCategoryOrder: Record<string, number> = Object.fromEntries(
 
 export function isAllowedAppCategorySlug(slug: string) {
   return APP_CATEGORY_SLUGS.includes(slug as (typeof APP_CATEGORY_SLUGS)[number]);
+}
+
+export function isActiveAppCategory(category: { slug: string; isActive?: boolean | null }) {
+  return Boolean(category.isActive) || isAllowedAppCategorySlug(category.slug);
 }
 
 export function sortCategoriesForApp<T extends { slug: string; name: string }>(categories: T[]) {

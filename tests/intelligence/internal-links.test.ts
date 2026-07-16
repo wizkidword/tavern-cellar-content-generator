@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   recommendInternalLinks,
+  resolveGeneratedInternalLinks,
   type InternalLinkCandidate,
 } from "@/lib/intelligence/internal-links";
 import { normalizeSearchText, scoreTokenOverlap, tokenizeForSearch } from "@/lib/intelligence/text";
@@ -103,4 +104,42 @@ test("uses a synced slug when a matching post has no link", () => {
   assert.equal(draftRecommendation?.url, "/vintage-mascot-advertising-before-tv");
   assert.ok((draftRecommendation?.confidence ?? 100) < recommendations[0].confidence);
   assert.match(draftRecommendation?.reason ?? "", /draft/i);
+});
+
+test("resolves generated internal link text to real synced published URLs", () => {
+  const links = resolveGeneratedInternalLinks({
+    keyword: "1950s cereal ads",
+    angle: "Use the ads to unpack sweetness and scientific nutrition in postwar kitchens.",
+    brief: "Focus on package mascots and the changing American pantry.",
+    generatedLinksText:
+      "Imaginary Tavern Cellar pantry piece - https://taverncellar.test/made-up-link/",
+    categoryId: 5,
+    candidates,
+    categoryFallback: {
+      title: "Retro Advertising",
+      url: "https://taverncellar.test/category/retro-advertising/",
+    },
+  });
+
+  assert.match(links, /1950s Cereal Ads Made Breakfast a Family Stage/);
+  assert.match(links, /https:\/\/taverncellar\.test\/1950s-cereal-ads-breakfast-family-stage\//);
+  assert.doesNotMatch(links, /made-up-link/);
+});
+
+test("falls back to the root category when no public synced link makes sense", () => {
+  const links = resolveGeneratedInternalLinks({
+    keyword: "vintage mascot advertising",
+    angle: "Show how cereal package characters became trusted commercial hosts.",
+    brief: "Connect mascots, package design, and early breakfast branding.",
+    generatedLinksText:
+      "Vintage Mascot Advertising Before Saturday Morning TV - /vintage-mascot-advertising-before-tv",
+    categoryId: 5,
+    candidates: [candidates[1], candidates[2]],
+    categoryFallback: {
+      title: "Retro Advertising",
+      url: "https://taverncellar.test/category/retro-advertising/",
+    },
+  });
+
+  assert.equal(links, "Retro Advertising - https://taverncellar.test/category/retro-advertising/");
 });

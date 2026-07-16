@@ -5,19 +5,29 @@ import { redirect } from "next/navigation";
 
 import {
   createArticle,
+  generateArticleModelComparison,
   publishArticle,
+  regenerateArticleBodyImages,
   regenerateFeaturedImage,
   saveArticleReview,
+  scheduleArticleRandomly,
 } from "@/lib/content-pipeline";
 import {
   createArticleFromOpportunity,
   createOpportunityFromInput,
+  deleteOpportunity,
   generateOpportunitiesForCategory,
   updateOpportunityStatus,
 } from "@/lib/intelligence/opportunities";
 import { upsertTopicClustersFromCurrentCatalog } from "@/lib/intelligence/clusters";
 import { assertOperatorAccessFromHeaders } from "@/lib/operator-auth";
-import { syncWordPressCatalog } from "@/lib/wordpress";
+import {
+  resolveFalImageModel,
+  resolveFeaturedImageProvider,
+  resolveOpenAIImageModel,
+} from "@/lib/featured-image";
+import { resolveOpenAITextModel } from "@/lib/openai-models";
+import { createWordPressCategoryAndSync, syncWordPressCatalog } from "@/lib/wordpress";
 
 function buildRedirect(pathname: string, params: Record<string, string>) {
   const searchParams = new URLSearchParams(params);
@@ -82,6 +92,11 @@ export async function generateArticleAction(formData: FormData) {
       angle: String(formData.get("angle") ?? ""),
       notes: String(formData.get("notes") ?? ""),
       generateImage: formData.get("generateImage") === "on",
+      textModel: resolveOpenAITextModel(formData.get("textModel")),
+      imageProvider: resolveFeaturedImageProvider(formData.get("imageProvider")),
+      falImageModel: resolveFalImageModel(formData.get("falImageModel")),
+      openAiImageModel: resolveOpenAIImageModel(formData.get("openAiImageModel")),
+      bodyImageCount: Number(String(formData.get("bodyImageCount") ?? "0")),
     });
 
     revalidatePath("/");
@@ -147,6 +162,58 @@ export async function generateOpportunityIdeasAction(formData: FormData) {
   redirect(targetPath);
 }
 
+export async function createWordPressCategoryAction(formData: FormData) {
+  let targetPath = "/opportunities";
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const category = await createWordPressCategoryAndSync({
+      name: String(formData.get("categoryName") ?? ""),
+      slug: String(formData.get("categorySlug") ?? ""),
+      description: String(formData.get("categoryDescription") ?? ""),
+    });
+    revalidatePath("/");
+    revalidatePath("/intelligence");
+    revalidatePath("/opportunities");
+    targetPath = buildRedirect("/opportunities", {
+      categoryId: String(category.id),
+      message: `Created WordPress category: ${category.name}.`,
+    });
+  } catch (error) {
+    targetPath = buildRedirect("/opportunities", {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function deleteOpportunityAction(opportunityId: string) {
+  let targetPath = "/opportunities";
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const opportunity = await deleteOpportunity(opportunityId);
+    revalidatePath("/intelligence");
+    revalidatePath("/opportunities");
+    revalidatePath(`/opportunities/${opportunityId}`);
+
+    if (opportunity.generatedArticleId) {
+      revalidatePath(`/articles/${opportunity.generatedArticleId}`);
+    }
+
+    targetPath = buildRedirect("/opportunities", {
+      message: `Deleted opportunity idea: ${opportunity.primaryKeyword}.`,
+    });
+  } catch (error) {
+    targetPath = buildRedirect("/opportunities", {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
 async function setOpportunityStatusAction(
   opportunityId: string,
   status: "APPROVED" | "REJECTED" | "ARCHIVED",
@@ -202,6 +269,11 @@ export async function generateOpportunityDraftAction(opportunityId: string, form
     await assertOperatorAccessFromHeaders();
     const article = await createArticleFromOpportunity(opportunityId, {
       generateImage: formData.get("generateImage") === "on",
+      textModel: resolveOpenAITextModel(formData.get("textModel")),
+      imageProvider: resolveFeaturedImageProvider(formData.get("imageProvider")),
+      falImageModel: resolveFalImageModel(formData.get("falImageModel")),
+      openAiImageModel: resolveOpenAIImageModel(formData.get("openAiImageModel")),
+      bodyImageCount: Number(String(formData.get("bodyImageCount") ?? "0")),
     });
     revalidatePath("/opportunities");
     revalidatePath(`/opportunities/${opportunityId}`);
@@ -239,6 +311,29 @@ export async function saveArticleReviewAction(articleId: string, formData: FormD
   redirect(targetPath);
 }
 
+export async function generateArticleComparisonAction(articleId: string, formData?: FormData) {
+  let targetPath = `/articles/${articleId}/compare`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const comparison = await generateArticleModelComparison(
+      articleId,
+      formData?.get("comparisonModel"),
+    );
+    revalidatePath(`/articles/${articleId}`);
+    revalidatePath(`/articles/${articleId}/compare`);
+    targetPath = buildRedirect(`/articles/${articleId}/compare`, {
+      message: `Generated ${comparison.openAiTextModel} comparison draft.`,
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
 export async function regenerateFeaturedImageAction(articleId: string, formData: FormData) {
   let targetPath = `/articles/${articleId}`;
 
@@ -248,6 +343,25 @@ export async function regenerateFeaturedImageAction(articleId: string, formData:
     revalidatePath(`/articles/${articleId}`);
     targetPath = buildRedirect(`/articles/${articleId}`, {
       message: "Featured image regenerated.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function regenerateArticleBodyImagesAction(articleId: string, formData: FormData) {
+  let targetPath = `/articles/${articleId}`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const article = await regenerateArticleBodyImages(articleId, formData);
+    revalidatePath(`/articles/${article.id}`);
+    targetPath = buildRedirect(`/articles/${article.id}`, {
+      message: `Generated ${article.bodyImages.length} article body image${article.bodyImages.length === 1 ? "" : "s"}.`,
     });
   } catch (error) {
     targetPath = buildRedirect(`/articles/${articleId}`, {
@@ -312,11 +426,37 @@ export async function scheduleArticleAction(articleId: string, formData: FormDat
     const article = await publishArticle(articleId, formData, "future");
     revalidatePath(`/articles/${articleId}`);
     revalidatePath("/");
+    revalidatePath("/calendar");
     targetPath = buildRedirect(`/articles/${articleId}`, {
       message:
         article.notes?.includes("Yoast SEO REST bridge")
           ? "Article scheduled in WordPress. Tags were synced. Yoast fields still need the companion bridge plugin installed on WordPress."
           : "Article scheduled in WordPress. Tags were synced.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function randomScheduleArticleAction(articleId: string, formData: FormData) {
+  let targetPath = `/articles/${articleId}`;
+
+  try {
+    await assertOperatorAccessFromHeaders();
+    const article = await scheduleArticleRandomly(articleId, formData);
+    const scheduleLabel = article.scheduledForLocal?.replace("T", " ") ?? "the selected random slot";
+    revalidatePath(`/articles/${articleId}`);
+    revalidatePath("/");
+    revalidatePath("/calendar");
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      message:
+        article.notes?.includes("Yoast SEO REST bridge")
+          ? `Article randomly scheduled in WordPress for ${scheduleLabel}. Tags were synced. Yoast fields still need the companion bridge plugin installed on WordPress.`
+          : `Article randomly scheduled in WordPress for ${scheduleLabel}. Tags were synced.`,
     });
   } catch (error) {
     targetPath = buildRedirect(`/articles/${articleId}`, {

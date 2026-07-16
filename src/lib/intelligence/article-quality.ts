@@ -18,6 +18,7 @@ export type ArticleQualityAnalysis = {
   focusKeyphraseInTitle: boolean;
   focusKeyphraseInOpening: boolean;
   focusKeyphraseInMetaDescription: boolean;
+  readerEngagementCta: boolean;
   warnings: string[];
 };
 
@@ -52,6 +53,10 @@ function openingText(markdown: string) {
   return markdownToPlainText(markdown).split(/\s+/).slice(0, 120).join(" ");
 }
 
+function closingText(markdown: string) {
+  return markdownToPlainText(markdown).split(/\s+/).slice(-140).join(" ");
+}
+
 function containsFocusKeyphrase(value: string, primaryKeyword: string) {
   const focus = normalizeSearchText(primaryKeyword);
 
@@ -60,6 +65,24 @@ function containsFocusKeyphrase(value: string, primaryKeyword: string) {
   }
 
   return normalizeSearchText(value).includes(focus);
+}
+
+function hasReaderEngagementCta(markdown: string) {
+  const closing = normalizeSearchText(closingText(markdown));
+  const readerPromptPatterns = [
+    /\bshare your thoughts?\b/,
+    /\bshare what you think\b/,
+    /\btell us what you think\b/,
+    /\blet us know\b/,
+    /\bwhat do you think\b/,
+    /\bwhich .* sticks with you\b/,
+    /\bdrop a comment\b/,
+    /\bcomment below\b/,
+    /\bin the comments\b/,
+    /\bjoin the conversation\b/,
+  ];
+
+  return readerPromptPatterns.some((pattern) => pattern.test(closing));
 }
 
 function buildWarnings(input: ArticleQualityAnalysis) {
@@ -93,6 +116,10 @@ function buildWarnings(input: ArticleQualityAnalysis) {
     warnings.push("Focus keyphrase is missing from the opening paragraph.");
   }
 
+  if (!input.readerEngagementCta) {
+    warnings.push("Add a closing call to action asking readers to share their thoughts.");
+  }
+
   return warnings;
 }
 
@@ -117,6 +144,7 @@ export function analyzeArticleQuality(input: ArticleQualityInput): ArticleQualit
       input.metaDescription,
       input.primaryKeyword,
     ),
+    readerEngagementCta: hasReaderEngagementCta(input.contentMarkdown),
     warnings: [],
   };
 

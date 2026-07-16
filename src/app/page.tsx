@@ -6,6 +6,7 @@ import {
 import { FoundryNav } from "@/app/foundry-nav";
 import { NewArticleForm } from "@/app/new-article-form";
 import { getDashboardData } from "@/lib/content-pipeline";
+import { getOpenAITextModelLabel } from "@/lib/openai-models";
 
 type HomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -153,6 +154,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   <div className="mt-4 flex flex-wrap items-center gap-3 text-xs tracking-[0.12em] text-[#d7bf95] uppercase">
                     <span>{article.primaryKeyword}</span>
                     <span>{article.slug}</span>
+                    <span>{getOpenAITextModelLabel(article.openAiTextModel)}</span>
                     {article.wpStatus ? <span>WP: {article.wpStatus}</span> : null}
                   </div>
                 </Link>

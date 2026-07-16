@@ -1,7 +1,14 @@
 import Link from "next/link";
 
-import { createOpportunityAction, generateOpportunityIdeasAction } from "@/app/actions";
+import {
+  createOpportunityAction,
+  createWordPressCategoryAction,
+  deleteOpportunityAction,
+  generateOpportunityIdeasAction,
+} from "@/app/actions";
 import { FoundryNav } from "@/app/foundry-nav";
+import { DeleteOpportunityButton } from "@/app/opportunities/delete-opportunity-button";
+import { canDeleteOpportunity } from "@/lib/intelligence/opportunities";
 import { getOpportunityListData, parseScoreReasons } from "@/lib/intelligence/read-models";
 
 type OpportunitiesPageProps = {
@@ -47,6 +54,34 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
             {message ? <p className="message message-success mb-4">{message}</p> : null}
             {error ? <p className="message message-error mb-4">{error}</p> : null}
 
+            <form action={createWordPressCategoryAction} className="mb-6 space-y-4 border-b border-[var(--line)] pb-6">
+              <div>
+                <p className="eyebrow mb-3">New Category</p>
+                <label className="label" htmlFor="categoryName">
+                  Category Name
+                </label>
+                <input className="field" id="categoryName" name="categoryName" required />
+              </div>
+
+              <div>
+                <label className="label" htmlFor="categorySlug">
+                  Slug
+                </label>
+                <input className="field" id="categorySlug" name="categorySlug" placeholder="optional" />
+              </div>
+
+              <div>
+                <label className="label" htmlFor="categoryDescription">
+                  Description
+                </label>
+                <textarea className="field min-h-24" id="categoryDescription" name="categoryDescription" />
+              </div>
+
+              <button className="action-secondary w-full" type="submit">
+                Create WordPress Category
+              </button>
+            </form>
+
             <form action={generateOpportunityIdeasAction} className="mb-6 rounded-[1.4rem] border border-[var(--line)] bg-black/10 p-4">
               <p className="eyebrow mb-3">AI Planning Pass</p>
               <label className="label" htmlFor="aiCategoryId">
@@ -75,7 +110,7 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
                 <label className="label" htmlFor="categoryId">
                   Category
                 </label>
-                <select className="field" id="categoryId" name="categoryId" required>
+                <select className="field" id="categoryId" name="categoryId" defaultValue={selectedCategoryId} required>
                   {data.categories.map((category) => (
                     <option key={category.id} value={category.id}>
                       {category.name}
@@ -159,37 +194,53 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
 
               {opportunities.map((opportunity) => {
                 const reasons = parseScoreReasons(opportunity.scoreReasons);
+                const canDelete = canDeleteOpportunity(opportunity.status);
 
                 return (
-                  <Link
+                  <div
                     className="opportunity-row"
-                    href={`/opportunities/${opportunity.id}`}
                     key={opportunity.id}
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <span className={statusClassName(opportunity.status)}>
-                        {opportunity.status.toLowerCase()}
-                      </span>
-                      <span className={`status-pill status-${opportunity.duplicateRiskLabel}`}>
-                        {opportunity.duplicateRiskLabel.replace("_", " ")}
-                      </span>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <Link
+                        className="block min-w-[16rem] flex-1"
+                        href={`/opportunities/${opportunity.id}`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <span className={statusClassName(opportunity.status)}>
+                            {opportunity.status.toLowerCase()}
+                          </span>
+                          <span className={`status-pill status-${opportunity.duplicateRiskLabel}`}>
+                            {opportunity.duplicateRiskLabel.replace("_", " ")}
+                          </span>
+                        </div>
+
+                        <h3 className="mt-4 text-2xl font-semibold text-[#fff4e1]">
+                          {opportunity.primaryKeyword}
+                        </h3>
+                        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{opportunity.angle}</p>
+
+                        <div className="score-strip mt-4">
+                          <span>Overall {opportunity.overallScore}</span>
+                          <span>Brand {opportunity.tavernFitScore}</span>
+                          <span>Coverage {opportunity.coverageScore}</span>
+                          <span>SEO {opportunity.seoScore}</span>
+                          <span>Links {opportunity.internalLinks.length}</span>
+                        </div>
+
+                        {reasons[0] ? <p className="mt-3 text-sm text-[#d7bf95]">{reasons[0]}</p> : null}
+                      </Link>
+
+                      {canDelete ? (
+                        <DeleteOpportunityButton
+                          className="action-danger px-4 py-2 text-sm"
+                          deleteAction={deleteOpportunityAction.bind(null, opportunity.id)}
+                          label="Delete"
+                          opportunityName={opportunity.primaryKeyword}
+                        />
+                      ) : null}
                     </div>
-
-                    <h3 className="mt-4 text-2xl font-semibold text-[#fff4e1]">
-                      {opportunity.primaryKeyword}
-                    </h3>
-                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{opportunity.angle}</p>
-
-                    <div className="score-strip mt-4">
-                      <span>Overall {opportunity.overallScore}</span>
-                      <span>Brand {opportunity.tavernFitScore}</span>
-                      <span>Coverage {opportunity.coverageScore}</span>
-                      <span>SEO {opportunity.seoScore}</span>
-                      <span>Links {opportunity.internalLinks.length}</span>
-                    </div>
-
-                    {reasons[0] ? <p className="mt-3 text-sm text-[#d7bf95]">{reasons[0]}</p> : null}
-                  </Link>
+                  </div>
                 );
               })}
             </div>
