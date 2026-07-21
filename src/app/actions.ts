@@ -12,6 +12,7 @@ import {
   regenerateFeaturedImage,
   saveArticleReview,
   scheduleArticleRandomly,
+  sourceFeaturedImageFromWikimedia,
 } from "@/lib/content-pipeline";
 import { createArticleClaim, updateArticleClaim } from "@/lib/article-claims";
 import { insertArticleInternalLink } from "@/lib/article-internal-links";
@@ -38,6 +39,7 @@ import {
   generateArticleFormSchema,
   opportunityFormSchema,
   parseFormData,
+  wikimediaFileTitleSchema,
   wordpressCategoryFormSchema,
 } from "@/lib/validation/schemas";
 import { createWordPressCategoryAndSync, syncWordPressCatalog } from "@/lib/wordpress";
@@ -451,6 +453,29 @@ export async function regenerateFeaturedImageAction(articleId: string, formData:
     revalidatePath(`/articles/${articleId}`);
     targetPath = buildRedirect(`/articles/${articleId}`, {
       message: "Featured image regenerated.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function sourceFeaturedImageFromWebAction(articleId: string, fileTitle: string) {
+  let targetPath = `/articles/${articleId}`;
+
+  try {
+    await assertOperatorActionAccess();
+    const article = await sourceFeaturedImageFromWikimedia(
+      articleId,
+      wikimediaFileTitleSchema.parse(fileTitle),
+    );
+    revalidatePath(`/articles/${article.id}`);
+    revalidatePath(`/articles/${article.id}/preflight`);
+    targetPath = buildRedirect(`/articles/${article.id}`, {
+      message: "Licensed web image saved with its credit for WordPress.",
     });
   } catch (error) {
     targetPath = buildRedirect(`/articles/${articleId}`, {

@@ -8,6 +8,7 @@ Private SEO content generator for `taverncellar.com`.
 - Tracks every locally generated article so duplicate titles and angles are blocked
 - Generates full article drafts with SEO metadata, tags, internal-link suggestions, and a featured image prompt
 - Optionally generates featured and in-article image assets through fal.ai or OpenAI
+- Lets you choose reusable Wikimedia Commons images for featured art, keeping the source and license credit when publishing to WordPress
 - Supports local review before sending a draft, publishing immediately, or scheduling in WordPress
 - Syncs WordPress tags automatically when pushing drafts or publishing
 

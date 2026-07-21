@@ -353,7 +353,7 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
           onChange={(event) => setGenerateImage(event.target.checked)}
           type="checkbox"
         />
-        Generate a featured image before opening the draft.
+        Generate an AI featured image before opening the draft. You can also choose a licensed web image on the review page.
       </label>
 
       <div>

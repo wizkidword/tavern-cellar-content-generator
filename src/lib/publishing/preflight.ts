@@ -19,6 +19,9 @@ export type PublishPreflightInput = {
   };
   featuredImagePath: string | null;
   featuredImageAlt: string;
+  featuredImageSourceUrl?: string | null;
+  featuredImageAttribution?: string | null;
+  featuredImageLicenseUrl?: string | null;
   featuredImageState: string;
   bodyImagesState: string;
   bodyImages: Array<{
@@ -135,6 +138,14 @@ export async function buildPublishPreflight(
       ? {
           publicPath: input.featuredImagePath,
           altText: input.featuredImageAlt,
+          credit:
+            input.featuredImageSourceUrl && input.featuredImageAttribution
+              ? {
+                  sourceUrl: input.featuredImageSourceUrl,
+                  attribution: input.featuredImageAttribution,
+                  licenseUrl: input.featuredImageLicenseUrl,
+                }
+              : null,
         }
       : null,
     bodyImages: input.bodyImages,
@@ -161,6 +172,9 @@ export async function buildPublishPreflight(
       ? {
           path: input.featuredImagePath,
           altText: input.featuredImageAlt,
+          sourceUrl: input.featuredImageSourceUrl ?? null,
+          attribution: input.featuredImageAttribution ?? null,
+          licenseUrl: input.featuredImageLicenseUrl ?? null,
           willReceiveWordPressUrl: true,
         }
       : null,

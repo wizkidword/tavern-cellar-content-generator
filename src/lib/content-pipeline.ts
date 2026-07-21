@@ -22,6 +22,7 @@ import {
   discardStagedGeneratedImages,
   generateStagedFeaturedImageAsset,
   promoteStagedGeneratedImage,
+  stageFeaturedImageBuffer,
   type GeneratedImageAsset,
   type StagedGeneratedImageAsset,
   type FalImageModel,
@@ -31,6 +32,7 @@ import {
   resolveFeaturedImageProvider,
   resolveOpenAIImageModel,
 } from "@/lib/featured-image";
+import { downloadLicensedWikimediaImage } from "@/lib/wikimedia-commons";
 import { analyzeArticleQuality } from "@/lib/intelligence/article-quality";
 import { assessDuplicateRisk } from "@/lib/intelligence/duplicates";
 import {
@@ -353,6 +355,9 @@ async function replaceFeaturedImageForArticle(input: {
           featuredImageErrorCode: null,
           featuredImageLastAttemptAt: new Date(),
           openAiImageModel: finalizedImage.imageModel,
+          featuredImageSourceUrl: null,
+          featuredImageAttribution: null,
+          featuredImageLicenseUrl: null,
           wpMediaId: null,
         },
         include: articleWithBodyImagesInclude(),
@@ -389,6 +394,92 @@ async function replaceFeaturedImageForArticle(input: {
     }
 
     await recordFeaturedImageFailure(input.article.id, error);
+    throw error;
+  }
+}
+
+export async function sourceFeaturedImageFromWikimedia(articleId: string, fileTitle: string) {
+  const article = await prisma.article.findUnique({
+    where: { id: articleId },
+    include: articleWithBodyImagesInclude(),
+  });
+
+  if (!article) {
+    throw new AppError("OPERATION_FAILED");
+  }
+
+  const operationKey = randomUUID();
+  let staged: StagedGeneratedImageAsset | null = null;
+  let promoted: GeneratedImageAsset | null = null;
+
+  await prisma.article.update({
+    where: { id: article.id },
+    data: {
+      featuredImageState: "GENERATING",
+      featuredImageErrorCode: null,
+      featuredImageLastAttemptAt: new Date(),
+    },
+  });
+
+  try {
+    const sourcedImage = await downloadLicensedWikimediaImage(fileTitle);
+    staged = await stageFeaturedImageBuffer({
+      articleId: article.id,
+      buffer: sourcedImage.buffer,
+      imageModel: "Wikimedia Commons",
+      operationKey,
+    });
+    const finalizedImage = await promoteStagedGeneratedImage(staged);
+    promoted = finalizedImage;
+    const updated = await prisma.$transaction((transaction) =>
+      transaction.article.update({
+        where: { id: article.id },
+        data: {
+          featuredImagePath: finalizedImage.publicPath,
+          featuredImageMimeType: finalizedImage.mimeType,
+          featuredImageState: "SUCCEEDED",
+          featuredImageErrorCode: null,
+          featuredImageLastAttemptAt: new Date(),
+          openAiImageModel: null,
+          featuredImageSourceUrl: sourcedImage.candidate.descriptionUrl,
+          featuredImageAttribution: sourcedImage.candidate.attribution,
+          featuredImageLicenseUrl: sourcedImage.candidate.licenseUrl,
+          wpMediaId: null,
+        },
+        include: articleWithBodyImagesInclude(),
+      }),
+    );
+    const cleanupError =
+      article.featuredImagePath && article.featuredImagePath !== finalizedImage.publicPath
+        ? await cleanupGeneratedImagePaths([article.featuredImagePath])
+        : null;
+
+    if (cleanupError) {
+      return prisma.article.update({
+        where: { id: article.id },
+        data: {
+          featuredImageState: "CLEANUP_WARNING",
+          featuredImageErrorCode: toAppError(cleanupError).code,
+        },
+        include: articleWithBodyImagesInclude(),
+      });
+    }
+
+    return updated;
+  } catch (error) {
+    if (promoted) {
+      await cleanupGeneratedImagePaths([promoted.publicPath]);
+    }
+
+    if (staged) {
+      try {
+        await discardStagedGeneratedImages([staged]);
+      } catch {
+        // The source failure remains the actionable recovery state.
+      }
+    }
+
+    await recordFeaturedImageFailure(article.id, error);
     throw error;
   }
 }

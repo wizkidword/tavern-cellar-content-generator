@@ -30,6 +30,28 @@ test("places the uploaded featured image at the top of the WordPress post conten
   assert.ok(html.indexOf("wp-image-42") < html.indexOf("<h2>Opening</h2>"));
 });
 
+test("keeps licensed web-image credit visible in the outgoing WordPress content", async () => {
+  const html = await buildWordPressPostContentHtml({
+    contentMarkdown: "## Opening\n\nBody copy follows the image.",
+    featuredImage: {
+      mediaId: 42,
+      sourceUrl: "https://taverncellar.test/wp-content/uploads/hero.png",
+      altText: "A historic castle",
+      credit: {
+        sourceUrl: "https://commons.wikimedia.org/wiki/File:Historic_Castle.jpg",
+        attribution: "Jordan & Casey via Wikimedia Commons · CC BY-SA 4.0",
+        licenseUrl: "https://creativecommons.org/licenses/by-sa/4.0",
+      },
+    },
+  });
+
+  assert.match(html, /Image credit:/);
+  assert.match(html, /Jordan &amp; Casey via Wikimedia Commons/);
+  assert.match(html, /https:\/\/commons\.wikimedia\.org\/wiki\/File:Historic_Castle\.jpg/);
+  assert.match(html, /https:\/\/creativecommons\.org\/licenses\/by-sa\/4\.0/);
+  assert.ok(html.indexOf("Image credit:") < html.indexOf("<h2>Opening</h2>"));
+});
+
 test("leaves WordPress post content unchanged when there is no featured image URL", async () => {
   const html = await buildWordPressPostContentHtml({
     contentMarkdown: "## Opening\n\nBody copy follows.",

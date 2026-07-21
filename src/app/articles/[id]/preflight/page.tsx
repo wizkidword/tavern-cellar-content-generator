@@ -66,6 +66,9 @@ export default async function ArticlePreflightPage({ params, searchParams }: Pre
       category: article.category,
       featuredImagePath: article.featuredImagePath,
       featuredImageAlt: article.featuredImageAlt,
+      featuredImageSourceUrl: article.featuredImageSourceUrl,
+      featuredImageAttribution: article.featuredImageAttribution,
+      featuredImageLicenseUrl: article.featuredImageLicenseUrl,
       featuredImageState: article.featuredImageState,
       bodyImagesState: article.bodyImagesState,
       bodyImages: article.bodyImages,
@@ -219,6 +222,19 @@ export default async function ArticlePreflightPage({ params, searchParams }: Pre
                     <p className="font-semibold text-[#fff4e1]">Featured image</p>
                     <p className="mt-1 break-all text-[var(--muted)]">{preflight.featuredImage.path}</p>
                     <p className="mt-2 text-[var(--muted)]">Alt text: {preflight.featuredImage.altText || "None"}</p>
+                    {preflight.featuredImage.attribution && preflight.featuredImage.sourceUrl ? (
+                      <p className="mt-2 text-[var(--muted)]">
+                        Credit: {preflight.featuredImage.attribution}.{" "}
+                        <a
+                          className="text-[#f4ba65] underline"
+                          href={preflight.featuredImage.sourceUrl}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          View source
+                        </a>
+                      </p>
+                    ) : null}
                   </div>
                 ) : (
                   <p className="text-[var(--muted)]">No featured image will be uploaded.</p>

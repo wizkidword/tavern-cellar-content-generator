@@ -288,6 +288,20 @@ async function writeGeneratedFeaturedImage(input: {
   };
 }
 
+/**
+ * Normalizes a reviewed, remotely sourced image into the same local staging
+ * flow used for generated media. This keeps external providers from becoming
+ * a runtime dependency when the article is later sent to WordPress.
+ */
+export async function stageFeaturedImageBuffer(input: {
+  articleId: string;
+  buffer: Buffer;
+  imageModel: string;
+  operationKey: string;
+}) {
+  return writeGeneratedFeaturedImage(input);
+}
+
 async function generateOpenAIFeaturedImage(
   articleId: string,
   prompt: string,

@@ -165,6 +165,9 @@ model Article {
   featuredImageAlt                       String
   featuredImagePath                      String?
   featuredImageMimeType                  String?
+  featuredImageSourceUrl                 String?
+  featuredImageAttribution               String?
+  featuredImageLicenseUrl                String?
   featuredImageState                     ImageOperationState @default(IDLE)
   featuredImageErrorCode                 String?
   featuredImageLastAttemptAt             DateTime?

@@ -118,6 +118,17 @@ export const angleAssistSchema = keywordAssistSchema.extend({
   primaryKeyword: requiredText(160),
 });
 
+export const wikimediaImageSearchSchema = z.object({
+  query: requiredText(180).min(3),
+});
+
+export const wikimediaFileTitleSchema = z
+  .string()
+  .trim()
+  .min(6)
+  .max(300)
+  .regex(/^File:/, "Choose an image returned by Wikimedia Commons.");
+
 function formDataRecord(formData: FormData) {
   return Object.fromEntries(
     Array.from(formData.entries()).map(([key, value]) => [key, typeof value === "string" ? value : ""]),

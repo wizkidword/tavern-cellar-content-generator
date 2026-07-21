@@ -140,10 +140,48 @@ function sourceUrlFromMedia(media: WordPressMediaRecord) {
   return sourceUrl || null;
 }
 
+function safeHttpsUrl(value: string | null | undefined) {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+type ImageCredit = {
+  sourceUrl: string;
+  attribution: string;
+  licenseUrl?: string | null;
+};
+
+function buildImageCreditHtml(credit: ImageCredit | null | undefined) {
+  const sourceUrl = safeHttpsUrl(credit?.sourceUrl);
+  const licenseUrl = safeHttpsUrl(credit?.licenseUrl);
+  const attribution = credit?.attribution.trim();
+
+  if (!sourceUrl || !attribution) {
+    return "";
+  }
+
+  const licenseLink = licenseUrl
+    ? ` · <a href="${escapeHtmlAttribute(licenseUrl)}" rel="noreferrer noopener" target="_blank">License</a>`
+    : "";
+
+  return `<p><em>Image credit: <a href="${escapeHtmlAttribute(
+    sourceUrl,
+  )}" rel="noreferrer noopener" target="_blank">${escapeHtmlAttribute(attribution)}</a>${licenseLink}</em></p>`;
+}
+
 function buildFeaturedImageBlockHtml(input: {
   mediaId: number;
   sourceUrl: string;
   altText: string;
+  credit?: ImageCredit | null;
 }) {
   const sourceUrl = input.sourceUrl.trim();
 
@@ -163,6 +201,7 @@ function buildFeaturedImageBlockHtml(input: {
       sourceUrl,
     )}" alt="${escapeHtmlAttribute(input.altText.trim())}" class="wp-image-${input.mediaId}"/></figure>`,
     "<!-- /wp:image -->",
+    buildImageCreditHtml(input.credit),
   ].join("\n");
 }
 
@@ -173,6 +212,7 @@ function replaceBodyImageMarkdownWithBlocks(
     mediaId: number;
     sourceUrl: string;
     altText: string;
+    credit?: ImageCredit | null;
   }>,
 ) {
   if (bodyImages.length === 0) {
@@ -203,6 +243,7 @@ function replaceBodyImageMarkdownWithBlocks(
         mediaId: image.mediaId,
         sourceUrl: image.sourceUrl,
         altText: image.altText,
+        credit: image.credit,
       });
     })
     .join("\n");
@@ -214,6 +255,7 @@ export async function buildWordPressPostContentHtml(input: {
     mediaId: number;
     sourceUrl: string;
     altText: string;
+    credit?: ImageCredit | null;
   } | null;
   bodyImages?: Array<{
     publicPath: string;
@@ -240,16 +282,23 @@ export async function buildWordPressPostContentHtml(input: {
   });
 }
 
-function buildPreflightImageHtml(input: { sourceUrl: string; altText: string }) {
+function buildPreflightImageHtml(input: {
+  sourceUrl: string;
+  altText: string;
+  credit?: ImageCredit | null;
+}) {
   const sourceUrl = input.sourceUrl.trim();
 
   if (!sourceUrl) {
     return "";
   }
 
-  return `<figure class="wp-block-image size-full"><img src="${escapeHtmlAttribute(
-    sourceUrl,
-  )}" alt="${escapeHtmlAttribute(input.altText.trim())}"/></figure>`;
+  return [
+    `<figure class="wp-block-image size-full"><img src="${escapeHtmlAttribute(
+      sourceUrl,
+    )}" alt="${escapeHtmlAttribute(input.altText.trim())}"/></figure>`,
+    buildImageCreditHtml(input.credit),
+  ].join("\n");
 }
 
 /**
@@ -262,6 +311,7 @@ export async function buildWordPressPreflightContentHtml(input: {
   featuredImage: {
     publicPath: string;
     altText: string;
+    credit?: ImageCredit | null;
   } | null;
   bodyImages?: Array<{
     publicPath: string;
@@ -272,6 +322,7 @@ export async function buildWordPressPreflightContentHtml(input: {
     ? buildPreflightImageHtml({
         sourceUrl: input.featuredImage.publicPath,
         altText: input.featuredImage.altText,
+        credit: input.featuredImage.credit,
       })
     : "";
   const approvedImageUrls = [
@@ -975,15 +1026,18 @@ function buildMediaMetadata(article: Article) {
     ),
     220,
   );
-  const safeCaption = clampText(`Featured image for "${stripHtml(article.title)}".`, 220);
-  const safeDescription = clampText(
-    stripHtml(
-      article.metaDescription ||
-        article.excerpt ||
-        `Featured image for ${article.title}.`,
-    ),
-    320,
+  const safeAttribution = clampText(stripHtml(article.featuredImageAttribution ?? ""), 220);
+  const sourceUrl = safeHttpsUrl(article.featuredImageSourceUrl);
+  const safeCaption = safeAttribution
+    ? clampText(`Image credit: ${safeAttribution}.`, 220)
+    : clampText(`Featured image for "${stripHtml(article.title)}".`, 220);
+  const description = stripHtml(
+    article.metaDescription || article.excerpt || `Featured image for ${article.title}.`,
   );
+  const sourceCredit = safeAttribution
+    ? ` Image credit: ${safeAttribution}.${sourceUrl ? ` Source: ${sourceUrl}` : ""}`
+    : "";
+  const safeDescription = clampText(`${description}${sourceCredit}`, 320);
 
   return {
     alt_text: safeAltText,
@@ -1281,6 +1335,14 @@ export async function pushArticleToWordPress(
             mediaId: featuredMedia.id,
             sourceUrl: featuredMedia.sourceUrl,
             altText: article.featuredImageAlt,
+            credit:
+              article.featuredImageSourceUrl && article.featuredImageAttribution
+                ? {
+                    sourceUrl: article.featuredImageSourceUrl,
+                    attribution: article.featuredImageAttribution,
+                    licenseUrl: article.featuredImageLicenseUrl,
+                  }
+                : null,
           }
         : null,
     bodyImages,

@@ -18,6 +18,7 @@ import {
   sendWordPressDraftAction,
 } from "@/app/actions";
 import { PublishActionButton } from "@/app/publish-action-button";
+import { LicensedWebImagePicker } from "@/app/articles/[id]/licensed-web-image-picker";
 import { MAX_ARTICLE_BODY_IMAGE_COUNT } from "@/lib/article-body-images";
 import { getArticleInternalLinkSuggestions } from "@/lib/article-internal-links";
 import {
@@ -520,9 +521,23 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                   />
                 ) : (
                   <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-4 py-12 text-center text-[var(--muted)]">
-                    No featured image generated yet.
+                    No featured image selected yet.
                   </div>
                 )}
+
+                {article.featuredImageSourceUrl && article.featuredImageAttribution ? (
+                  <div className="rounded-[1rem] border border-[#c99a54]/30 bg-[#2b2116] px-3 py-2 text-xs leading-5 text-[#f2dfbd]">
+                    Licensed web image: {article.featuredImageAttribution}.{" "}
+                    <a
+                      className="underline"
+                      href={article.featuredImageSourceUrl}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      View source
+                    </a>
+                  </div>
+                ) : null}
 
                 <p className="text-xs leading-5 text-[var(--muted)]">
                   Asset state: {article.featuredImageState.replaceAll("_", " ").toLowerCase()}
@@ -587,6 +602,11 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                   ) : null}
                 </div>
 
+                <LicensedWebImagePicker
+                  articleId={article.id}
+                  defaultQuery={`${article.title} ${article.primaryKeyword}`.slice(0, 180)}
+                />
+
                 <div>
                   <label className="label" htmlFor="notes">
                     Editorial Notes
@@ -596,7 +616,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
 
                 <div>
                   <label className="label" htmlFor="imageProvider">
-                    Featured Image Generator
+                    AI Featured Image Generator
                   </label>
                   <select
                     className="field"
@@ -656,7 +676,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                   formAction={regenerateFeaturedImageAction.bind(null, article.id)}
                   type="submit"
                 >
-                  Generate / Refresh Featured Image
+                  Generate / Refresh AI Featured Image
                 </button>
               </div>
             </section>
