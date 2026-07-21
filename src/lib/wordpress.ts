@@ -239,6 +239,51 @@ export async function buildWordPressPostContentHtml(input: {
   });
 }
 
+function buildPreflightImageHtml(input: { sourceUrl: string; altText: string }) {
+  const sourceUrl = input.sourceUrl.trim();
+
+  if (!sourceUrl) {
+    return "";
+  }
+
+  return `<figure class="wp-block-image size-full"><img src="${escapeHtmlAttribute(
+    sourceUrl,
+  )}" alt="${escapeHtmlAttribute(input.altText.trim())}"/></figure>`;
+}
+
+/**
+ * Renders the saved article through the same Markdown renderer and HTML sanitizer
+ * used for publishing. Generated image paths stay local in this preflight because
+ * WordPress only assigns their final media URLs during the upload itself.
+ */
+export async function buildWordPressPreflightContentHtml(input: {
+  contentMarkdown: string;
+  featuredImage: {
+    publicPath: string;
+    altText: string;
+  } | null;
+  bodyImages?: Array<{
+    publicPath: string;
+    altText: string;
+  }>;
+}) {
+  const imageBlock = input.featuredImage?.publicPath.trim()
+    ? buildPreflightImageHtml({
+        sourceUrl: input.featuredImage.publicPath,
+        altText: input.featuredImage.altText,
+      })
+    : "";
+  const approvedImageUrls = [
+    input.featuredImage?.publicPath,
+    ...(input.bodyImages ?? []).map((image) => image.publicPath),
+  ].filter((url): url is string => Boolean(url?.trim()));
+
+  return renderSanitizedArticleHtml({
+    markdown: imageBlock ? `${imageBlock}\n\n${input.contentMarkdown}` : input.contentMarkdown,
+    approvedImageUrls,
+  });
+}
+
 type WordPressErrorPayload = {
   code?: string;
 };

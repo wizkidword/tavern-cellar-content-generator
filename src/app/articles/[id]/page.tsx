@@ -275,6 +275,9 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                 </div>
 
                 <div className="grid gap-3">
+                  <Link className="action-primary text-center" href={`/articles/${article.id}/preflight`}>
+                    Open Exact Publish Preflight
+                  </Link>
                   <button className="action-primary" type="submit">
                     Save Review Changes
                   </button>

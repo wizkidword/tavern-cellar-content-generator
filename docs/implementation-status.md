@@ -105,6 +105,14 @@ Status: complete on 2026-07-21.
 - **Schema and migration notes:** Added `20260721210000_generation_telemetry`. The local SQLite database was backed up before applying it. The same migration removes the one-comparison-per-model uniqueness restriction so historical comparison runs are preserved.
 - **Verification:** `npm test` has 133 passing tests, including deterministic-link, duplicate-calibration, Markdown-quality, and lifecycle coverage. TypeScript, ESLint, Prisma validation, migration status/diff, the fresh-and-legacy SQLite rehearsal, and a Next.js production build passed.
 
+## Phase 9 — operator usability and recovery tools
+
+Status: in progress on 2026-07-21.
+
+- **UX-01 (complete):** Added an authenticated, saved-data publish preflight at `/articles/[id]/preflight`. Operators can select draft, publish-now, or scheduled intent and inspect the exact saved title, slug, excerpt, focus phrase, Yoast fields, category, tags, desired status, schedule/timezone, media plan, resolved links, warnings, and blockers before invoking WordPress.
+- **UX-01 (complete):** The preflight uses the same Markdown renderer and HTML sanitizer as WordPress publishing, then shows both the rendered result and the exact sanitized HTML. It clearly distinguishes local generated image paths from WordPress-assigned media URLs, which cannot exist until WordPress uploads the files.
+- **Verification:** Added preflight rendering/blocker tests. The suite now has 135 passing tests; TypeScript, ESLint, and the Next.js production build pass. UX-02 through UX-04 remain next in this phase.
+
 ## Deferred by design
 
-- Product-feature changes: Phase 9.
+- Product-feature changes: later phases after Phase 9.
