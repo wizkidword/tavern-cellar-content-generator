@@ -100,6 +100,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
   const query = searchParams ? await searchParams : undefined;
   const message = firstValue(query?.message);
   const error = firstValue(query?.error);
+  const shouldAutoSearchLicensedImages = firstValue(query?.imageSource) === "licensed";
   const errorMessage = getErrorFeedback(error, firstValue(query?.ref));
   const sourceOpportunity = article.contentOpportunities[0];
   const qualityWarnings = parseArticleQualityWarnings(article.qualityWarnings);
@@ -370,7 +371,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
               </div>
             </section>
 
-            <section className="panel rounded-[2rem] p-6">
+            <section className="panel rounded-[2rem] p-6" id="featured-image">
               <div className="mb-5">
                 <p className="eyebrow mb-3">Quality Signals</p>
                 <h2 className="display text-3xl font-semibold text-[#fff1d7]">
@@ -604,6 +605,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
 
                 <LicensedWebImagePicker
                   articleId={article.id}
+                  autoSearch={shouldAutoSearchLicensedImages}
                   defaultQuery={`${article.title} ${article.primaryKeyword}`.slice(0, 180)}
                 />
 

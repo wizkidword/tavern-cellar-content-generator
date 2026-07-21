@@ -34,12 +34,15 @@ const imageSettings = {
   openAiImageModel: z.enum(OPENAI_IMAGE_MODEL_IDS),
 };
 
+const featuredImageMode = z.enum(["none", "ai", "licensed"]).optional();
+
 export const generateArticleFormSchema = z.object({
   categoryId,
   primaryKeyword: requiredText(160),
   angle: requiredText(1_000),
   notes: optionalText(4_000),
   generateImage: enabledCheckbox,
+  featuredImageMode,
   textModel: z.enum(OPENAI_TEXT_MODEL_IDS),
   bodyImageCount,
   ...imageSettings,
@@ -64,6 +67,7 @@ export const categoryOnlyFormSchema = z.object({ categoryId });
 
 export const articleGenerationSettingsSchema = z.object({
   generateImage: enabledCheckbox,
+  featuredImageMode,
   textModel: z.enum(OPENAI_TEXT_MODEL_IDS),
   bodyImageCount,
   ...imageSettings,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { sourceFeaturedImageFromWebAction } from "@/app/actions";
 import type { WikimediaImageCandidate } from "@/lib/wikimedia-commons";
@@ -17,16 +17,22 @@ function errorMessage(error: SearchResponse["error"]) {
 type LicensedWebImagePickerProps = {
   articleId: string;
   defaultQuery: string;
+  autoSearch?: boolean;
 };
 
-export function LicensedWebImagePicker({ articleId, defaultQuery }: LicensedWebImagePickerProps) {
+export function LicensedWebImagePicker({
+  articleId,
+  defaultQuery,
+  autoSearch = false,
+}: LicensedWebImagePickerProps) {
   const [query, setQuery] = useState(defaultQuery);
   const [images, setImages] = useState<WikimediaImageCandidate[]>([]);
   const [feedback, setFeedback] = useState("");
   const [isSearching, startSearch] = useTransition();
   const [isSaving, startSaving] = useTransition();
+  const hasAutoSearched = useRef(false);
 
-  function search() {
+  const search = useCallback(() => {
     const normalizedQuery = query.trim();
 
     if (normalizedQuery.length < 3) {
@@ -60,7 +66,14 @@ export function LicensedWebImagePicker({ articleId, defaultQuery }: LicensedWebI
         setFeedback(error instanceof Error ? error.message : "The image search could not complete.");
       }
     });
-  }
+  }, [query]);
+
+  useEffect(() => {
+    if (autoSearch && !hasAutoSearched.current) {
+      hasAutoSearched.current = true;
+      search();
+    }
+  }, [autoSearch, search]);
 
   function chooseImage(image: WikimediaImageCandidate) {
     setFeedback("Saving this licensed image to the article...");

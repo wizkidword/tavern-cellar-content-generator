@@ -238,10 +238,23 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
                         ))}
                       </select>
                     </div>
-                    <label className="flex items-center gap-3 rounded-[1rem] border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#f2e7cf]">
-                      <input name="generateImage" type="checkbox" />
-                      Generate featured image after article draft
-                    </label>
+                    <fieldset>
+                      <legend className="label">Featured Image Plan</legend>
+                      <div className="grid gap-2">
+                        <label className="flex items-center gap-3 rounded-[1rem] border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#f2e7cf]">
+                          <input defaultChecked name="featuredImageMode" type="radio" value="none" />
+                          No image yet
+                        </label>
+                        <label className="flex items-center gap-3 rounded-[1rem] border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#f2e7cf]">
+                          <input name="featuredImageMode" type="radio" value="ai" />
+                          Generate an AI featured image
+                        </label>
+                        <label className="flex items-center gap-3 rounded-[1rem] border border-[#c99a54]/50 bg-[#2b2116] px-4 py-3 text-sm text-[#f2dfbd]">
+                          <input name="featuredImageMode" type="radio" value="licensed" />
+                          Find a real licensed image after the draft is ready
+                        </label>
+                      </div>
+                    </fieldset>
                     <div>
                       <label className="label" htmlFor="bodyImageCount">
                         Images Inside Article

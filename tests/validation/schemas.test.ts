@@ -34,6 +34,16 @@ test("parses bounded article generation input at the form boundary", () => {
   assert.equal(parsed.bodyImageCount, 1);
 });
 
+test("accepts the licensed web-image plan while retaining the legacy AI checkbox", () => {
+  const formData = generationFormData();
+  formData.set("featuredImageMode", "licensed");
+
+  const parsed = parseFormData(generateArticleFormSchema, formData);
+
+  assert.equal(parsed.featuredImageMode, "licensed");
+  assert.equal(parsed.generateImage, true);
+});
+
 test("rejects oversized article generation input with a stable error code", () => {
   const formData = generationFormData();
   formData.set("primaryKeyword", "x".repeat(161));

@@ -64,6 +64,25 @@ function getErrorMessage(error: unknown) {
   return reportAppError(error, "server_action");
 }
 
+function resolveFeaturedImageMode(input: {
+  generateImage: boolean;
+  featuredImageMode?: "none" | "ai" | "licensed";
+}) {
+  return input.featuredImageMode ?? (input.generateImage ? "ai" : "none");
+}
+
+function articleDraftRedirect(articleId: string, imageMode: "none" | "ai" | "licensed", message: string) {
+  const target = buildRedirect(`/articles/${articleId}`, {
+    message:
+      imageMode === "licensed"
+        ? "Draft ready. Licensed image results are loading below."
+        : message,
+    ...(imageMode === "licensed" ? { imageSource: "licensed" } : {}),
+  });
+
+  return imageMode === "licensed" ? `${target}#featured-image` : target;
+}
+
 async function runWordPressCatalogSync(
   mode: "FULL_PRIVATE" | "PUBLIC_ONLY",
   targetPage: "/" | "/operations",
@@ -138,13 +157,21 @@ export async function generateArticleAction(formData: FormData) {
     const session = await assertOperatorActionAccess();
     const input = parseFormData(generateArticleFormSchema, formData);
     assertProviderActionAllowed(session.sid);
-    const article = await createArticle(input);
+    const imageMode = resolveFeaturedImageMode(input);
+    const articleInput = { ...input };
+    delete articleInput.featuredImageMode;
+    const article = await createArticle({
+      ...articleInput,
+      generateImage: imageMode === "ai",
+    });
 
     revalidatePath("/");
     revalidatePath(`/articles/${article.id}`);
-    targetPath = buildRedirect(`/articles/${article.id}`, {
-      message: "Article generated and saved to the review queue.",
-    });
+    targetPath = articleDraftRedirect(
+      article.id,
+      imageMode,
+      "Article generated and saved to the review queue.",
+    );
   } catch (error) {
     targetPath = buildRedirect("/", {
       error: getErrorMessage(error),
@@ -313,17 +340,25 @@ export async function generateOpportunityDraftAction(opportunityId: string, form
     const session = await assertOperatorActionAccess();
     const input = parseFormData(articleGenerationSettingsSchema, formData);
     assertProviderActionAllowed(session.sid);
+    const imageMode = resolveFeaturedImageMode(input);
+    const opportunityInput = { ...input };
+    delete opportunityInput.featuredImageMode;
     const article = await createArticleFromOpportunity(
       opportunityId,
-      input,
+      {
+        ...opportunityInput,
+        generateImage: imageMode === "ai",
+      },
     );
     revalidatePath("/opportunities");
     revalidatePath(`/opportunities/${opportunityId}`);
     revalidatePath(`/articles/${article.id}`);
     revalidatePath("/");
-    targetPath = buildRedirect(`/articles/${article.id}`, {
-      message: "Draft generated from the approved opportunity.",
-    });
+    targetPath = articleDraftRedirect(
+      article.id,
+      imageMode,
+      "Draft generated from the approved opportunity.",
+    );
   } catch (error) {
     targetPath = buildRedirect(`/opportunities/${opportunityId}`, {
       error: getErrorMessage(error),

@@ -33,6 +33,8 @@ type AssistResponse = {
   error?: string | { code: string; correlationId?: string; message: string };
 };
 
+type FeaturedImageMode = "none" | "ai" | "licensed";
+
 function assistErrorMessage(error: AssistResponse["error"]) {
   return typeof error === "string" ? error : error?.message;
 }
@@ -80,7 +82,7 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
   const [primaryKeyword, setPrimaryKeyword] = useState("");
   const [angle, setAngle] = useState("");
   const [notes, setNotes] = useState("");
-  const [generateImage, setGenerateImage] = useState(false);
+  const [featuredImageMode, setFeaturedImageMode] = useState<FeaturedImageMode>("none");
   const [keywordSuggestions, setKeywordSuggestions] = useState<string[]>([]);
   const [angleSuggestions, setAngleSuggestions] = useState<string[]>([]);
   const [assistError, setAssistError] = useState("");
@@ -345,16 +347,53 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
         </select>
       </div>
 
-      <label className="flex items-center gap-3 rounded-2xl border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#eadbbe]">
-        <input
-          checked={generateImage}
-          className="size-4 accent-[var(--accent)]"
-          name="generateImage"
-          onChange={(event) => setGenerateImage(event.target.checked)}
-          type="checkbox"
-        />
-        Generate an AI featured image before opening the draft. You can also choose a licensed web image on the review page.
-      </label>
+      <fieldset>
+        <legend className="label">Featured Image Plan</legend>
+        <div className="grid gap-3">
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#eadbbe]">
+            <input
+              checked={featuredImageMode === "none"}
+              className="mt-1 size-4 accent-[var(--accent)]"
+              name="featuredImageMode"
+              onChange={() => setFeaturedImageMode("none")}
+              type="radio"
+              value="none"
+            />
+            <span>
+              <span className="block font-semibold text-[#fff4e1]">No image yet</span>
+              Create the draft first and decide later.
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[var(--line)] bg-black/10 px-4 py-3 text-sm text-[#eadbbe]">
+            <input
+              checked={featuredImageMode === "ai"}
+              className="mt-1 size-4 accent-[var(--accent)]"
+              name="featuredImageMode"
+              onChange={() => setFeaturedImageMode("ai")}
+              type="radio"
+              value="ai"
+            />
+            <span>
+              <span className="block font-semibold text-[#fff4e1]">Generate an AI image</span>
+              Create featured art while the draft is being made.
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[#c99a54]/50 bg-[#2b2116] px-4 py-3 text-sm text-[#f2dfbd]">
+            <input
+              checked={featuredImageMode === "licensed"}
+              className="mt-1 size-4 accent-[var(--accent)]"
+              name="featuredImageMode"
+              onChange={() => setFeaturedImageMode("licensed")}
+              type="radio"
+              value="licensed"
+            />
+            <span>
+              <span className="block font-semibold text-[#fff4e1]">Find a real licensed image</span>
+              After the draft is ready, Foundry jumps to matching web-image results automatically. No AI art is made.
+            </span>
+          </label>
+        </div>
+      </fieldset>
 
       <div>
         <label className="label" htmlFor="bodyImageCount">
@@ -371,7 +410,7 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
 
       <div>
         <label className="label" htmlFor="imageProvider">
-          Image Generator
+          AI Image Settings
         </label>
         <select
           className="field"
@@ -386,6 +425,9 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
             </option>
           ))}
         </select>
+        <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+          Used only for AI featured art or images inside the article.
+        </p>
       </div>
 
       <div>
