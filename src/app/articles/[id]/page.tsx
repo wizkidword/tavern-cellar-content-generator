@@ -528,7 +528,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
 
                 {article.featuredImageSourceUrl && article.featuredImageAttribution ? (
                   <div className="rounded-[1rem] border border-[#c99a54]/30 bg-[#2b2116] px-3 py-2 text-xs leading-5 text-[#f2dfbd]">
-                    Licensed web image: {article.featuredImageAttribution}.{" "}
+                    Web image source: {article.featuredImageAttribution}.{" "}
                     <a
                       className="underline"
                       href={article.featuredImageSourceUrl}

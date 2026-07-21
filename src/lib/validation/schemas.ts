@@ -122,16 +122,14 @@ export const angleAssistSchema = keywordAssistSchema.extend({
   primaryKeyword: requiredText(160),
 });
 
-export const wikimediaImageSearchSchema = z.object({
+export const webImageSearchSchema = z.object({
   query: requiredText(180).min(3),
 });
 
-export const wikimediaFileTitleSchema = z
-  .string()
-  .trim()
-  .min(6)
-  .max(300)
-  .regex(/^File:/, "Choose an image returned by Wikimedia Commons.");
+export const webImageSelectionSchema = z.object({
+  assetId: z.string().trim().min(6).max(300),
+  source: z.enum(["wikimedia", "openverse"]),
+});
 
 function formDataRecord(formData: FormData) {
   return Object.fromEntries(

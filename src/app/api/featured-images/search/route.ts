@@ -2,14 +2,14 @@ import { NextResponse } from "next/server";
 
 import { getAppErrorHttpStatus, reportAppError } from "@/lib/errors/app-error";
 import { assertOperatorApiAccess } from "@/lib/operator-auth";
-import { parseRequestBody, wikimediaImageSearchSchema } from "@/lib/validation/schemas";
-import { searchLicensedWikimediaImages } from "@/lib/wikimedia-commons";
+import { parseRequestBody, webImageSearchSchema } from "@/lib/validation/schemas";
+import { searchLicensedWebImages } from "@/lib/web-image-search";
 
 export async function POST(request: Request) {
   try {
     assertOperatorApiAccess(request);
-    const body = parseRequestBody(wikimediaImageSearchSchema, await request.json());
-    const images = await searchLicensedWikimediaImages(body.query);
+    const body = parseRequestBody(webImageSearchSchema, await request.json());
+    const images = await searchLicensedWebImages(body.query);
 
     return NextResponse.json({ images });
   } catch (error) {

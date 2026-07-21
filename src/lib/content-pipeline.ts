@@ -32,7 +32,7 @@ import {
   resolveFeaturedImageProvider,
   resolveOpenAIImageModel,
 } from "@/lib/featured-image";
-import { downloadLicensedWikimediaImage } from "@/lib/wikimedia-commons";
+import { downloadLicensedWebImage, type WebImageSource } from "@/lib/web-image-search";
 import { analyzeArticleQuality } from "@/lib/intelligence/article-quality";
 import { assessDuplicateRisk } from "@/lib/intelligence/duplicates";
 import {
@@ -398,7 +398,10 @@ async function replaceFeaturedImageForArticle(input: {
   }
 }
 
-export async function sourceFeaturedImageFromWikimedia(articleId: string, fileTitle: string) {
+export async function sourceFeaturedImageFromWeb(
+  articleId: string,
+  selection: { assetId: string; source: WebImageSource },
+) {
   const article = await prisma.article.findUnique({
     where: { id: articleId },
     include: articleWithBodyImagesInclude(),
@@ -422,11 +425,11 @@ export async function sourceFeaturedImageFromWikimedia(articleId: string, fileTi
   });
 
   try {
-    const sourcedImage = await downloadLicensedWikimediaImage(fileTitle);
+    const sourcedImage = await downloadLicensedWebImage(selection);
     staged = await stageFeaturedImageBuffer({
       articleId: article.id,
       buffer: sourcedImage.buffer,
-      imageModel: "Wikimedia Commons",
+      imageModel: sourcedImage.candidate.providerLabel,
       operationKey,
     });
     const finalizedImage = await promoteStagedGeneratedImage(staged);

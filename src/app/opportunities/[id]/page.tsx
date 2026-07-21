@@ -251,7 +251,7 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
                         </label>
                         <label className="flex items-center gap-3 rounded-[1rem] border border-[#c99a54]/50 bg-[#2b2116] px-4 py-3 text-sm text-[#f2dfbd]">
                           <input name="featuredImageMode" type="radio" value="licensed" />
-                          Find a real licensed image after the draft is ready
+                          Find a real draft-reference image after the draft is ready
                         </label>
                       </div>
                     </fieldset>

@@ -388,8 +388,8 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
               value="licensed"
             />
             <span>
-              <span className="block font-semibold text-[#fff4e1]">Find a real licensed image</span>
-              After the draft is ready, Foundry jumps to matching web-image results automatically. No AI art is made.
+              <span className="block font-semibold text-[#fff4e1]">Find a real draft-reference image</span>
+              After the draft is ready, Foundry searches stronger web-image results automatically. No AI art is made.
             </span>
           </label>
         </div>

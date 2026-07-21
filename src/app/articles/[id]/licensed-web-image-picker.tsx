@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { sourceFeaturedImageFromWebAction } from "@/app/actions";
-import type { WikimediaImageCandidate } from "@/lib/wikimedia-commons";
+import type { WebImageCandidate } from "@/lib/web-image-search";
 
 type SearchResponse = {
-  images?: WikimediaImageCandidate[];
+  images?: WebImageCandidate[];
   error?: { message?: string } | string;
 };
 
@@ -26,7 +26,7 @@ export function LicensedWebImagePicker({
   autoSearch = false,
 }: LicensedWebImagePickerProps) {
   const [query, setQuery] = useState(defaultQuery);
-  const [images, setImages] = useState<WikimediaImageCandidate[]>([]);
+  const [images, setImages] = useState<WebImageCandidate[]>([]);
   const [feedback, setFeedback] = useState("");
   const [isSearching, startSearch] = useTransition();
   const [isSaving, startSaving] = useTransition();
@@ -36,7 +36,7 @@ export function LicensedWebImagePicker({
     const normalizedQuery = query.trim();
 
     if (normalizedQuery.length < 3) {
-      setFeedback("Enter at least three characters to search for a licensed image.");
+      setFeedback("Enter at least three characters to search for a draft-reference image.");
       return;
     }
 
@@ -58,7 +58,7 @@ export function LicensedWebImagePicker({
         setImages(payload.images ?? []);
         setFeedback(
           payload.images?.length
-            ? "Choose an image below. Its creator and license will travel with the WordPress post."
+            ? "Choose an image below. Its source and license stay attached to the draft for review."
             : "No reusable images matched that search. Try a simpler or broader phrase.",
         );
       } catch (error) {
@@ -75,24 +75,24 @@ export function LicensedWebImagePicker({
     }
   }, [autoSearch, search]);
 
-  function chooseImage(image: WikimediaImageCandidate) {
-    setFeedback("Saving this licensed image to the article...");
+  function chooseImage(image: WebImageCandidate) {
+    setFeedback("Saving this web image to the draft...");
     startSaving(() => {
-      sourceFeaturedImageFromWebAction(articleId, image.fileTitle);
+      sourceFeaturedImageFromWebAction(articleId, image.source, image.assetId);
     });
   }
 
   return (
     <div className="rounded-[1.4rem] border border-[var(--line)] bg-black/10 p-4">
-      <p className="text-sm font-semibold text-[#fff4e1]">Use a real licensed web image instead</p>
+      <p className="text-sm font-semibold text-[#fff4e1]">Find a stronger real image for this draft</p>
       <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-        Search Wikimedia Commons. Foundry only offers reusable images, saves a local copy, and adds
-        the visible credit when you send the post to WordPress.
+        Search Wikimedia Commons plus Openverse&apos;s Creative Commons and public-domain catalog, including
+        Flickr. Save one as a draft reference, then confirm its rights or replace it before publishing.
       </p>
 
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         <input
-          aria-label="Search licensed web images"
+          aria-label="Search draft-reference web images"
           className="field min-w-0 flex-1"
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
@@ -109,7 +109,7 @@ export function LicensedWebImagePicker({
           onClick={search}
           type="button"
         >
-          {isSearching ? "Searching..." : "Find licensed images"}
+          {isSearching ? "Searching..." : "Find web images"}
         </button>
       </div>
 
@@ -120,7 +120,7 @@ export function LicensedWebImagePicker({
           {images.map((image) => (
             <article
               className="overflow-hidden rounded-[1rem] border border-[var(--line)] bg-[#07110e]"
-              key={image.fileTitle}
+              key={`${image.source}:${image.assetId}`}
             >
               {/* This preview has a provider-validated HTTPS URL and is not app content. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -133,6 +133,9 @@ export function LicensedWebImagePicker({
               />
               <div className="space-y-2 p-3">
                 <p className="line-clamp-2 text-sm font-semibold text-[#fff4e1]">{image.title}</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#d7bf95]">
+                  {image.providerLabel}
+                </p>
                 <p className="text-xs leading-5 text-[var(--muted)]">{image.attribution}</p>
                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
                   <a
@@ -160,7 +163,7 @@ export function LicensedWebImagePicker({
                   onClick={() => chooseImage(image)}
                   type="button"
                 >
-                  {isSaving ? "Saving image..." : "Use this featured image"}
+                  {isSaving ? "Saving image..." : "Use in this draft"}
                 </button>
               </div>
             </article>
