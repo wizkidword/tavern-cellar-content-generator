@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { logoutOperatorAction } from "@/app/login/actions";
+
 const navItems = [
   { href: "/", label: "Dashboard" },
   { href: "/intelligence", label: "Intelligence" },
@@ -20,6 +22,11 @@ export function FoundryNav() {
             {item.label}
           </Link>
         ))}
+        <form action={logoutOperatorAction}>
+          <button className="foundry-nav-link border-0 bg-transparent" type="submit">
+            Sign out
+          </button>
+        </form>
       </div>
     </nav>
   );

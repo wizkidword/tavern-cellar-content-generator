@@ -463,7 +463,11 @@ function getClient(textModelOverride?: unknown) {
   const env = requireOpenAIEnv();
 
   return {
-    client: new OpenAI({ apiKey: env.OPENAI_API_KEY }),
+    client: new OpenAI({
+      apiKey: env.OPENAI_API_KEY,
+      maxRetries: 0,
+      timeout: 45_000,
+    }),
     textModel: resolveOpenAITextModel(textModelOverride ?? env.OPENAI_TEXT_MODEL),
     imageModel: env.OPENAI_IMAGE_MODEL,
   };
@@ -496,6 +500,7 @@ export async function generateArticleDraft(input: GenerateArticleInput): Promise
 
   const response = await client.responses.create({
     model: textModel,
+    max_output_tokens: 4_500,
     instructions: [
       "You are Tavern Cellar's editorial SEO engine.",
       "Write original, search-intent-aware long-form content with a strong human voice.",
@@ -606,6 +611,7 @@ export async function generateContentOpportunityIdeas(input: {
 
   const response = await client.responses.create({
     model: textModel,
+    max_output_tokens: 1_600,
     instructions: [
       "You are Tavern Cellar's content opportunity strategist.",
       "Suggest search-useful article opportunities that balance Tavern brand fit, SEO value, and coverage gaps.",
@@ -680,6 +686,7 @@ export async function generatePrimaryKeywordIdeas(input: {
 
   const response = await client.responses.create({
     model: textModel,
+    max_output_tokens: 900,
     instructions: [
       "You are Tavern Cellar's content planning assistant.",
       "Generate concise, search-friendly primary keyword ideas for a blog article.",
@@ -749,6 +756,7 @@ export async function generateAngleIdeas(input: {
 
   const response = await client.responses.create({
     model: textModel,
+    max_output_tokens: 1_200,
     instructions: [
       "You are Tavern Cellar's editorial angle assistant.",
       "Generate strong article angles that can lead to a full SEO-friendly draft.",

@@ -54,7 +54,7 @@ if not exist ".env" (
 )
 
 echo Preparing local database...
-call npx prisma db push
+call npm run db:migrate
 if errorlevel 1 (
   echo Prisma setup failed.
   pause

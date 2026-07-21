@@ -19,6 +19,7 @@ import {
   getArticleImageRecoveryState,
   getDashboardData,
 } from "@/lib/content-pipeline";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import {
   DEFAULT_FAL_IMAGE_MODEL,
   DEFAULT_FEATURED_IMAGE_PROVIDER,
@@ -31,10 +32,13 @@ import {
   resolveOpenAIImageModel,
 } from "@/lib/featured-image-models";
 import { parseArticleQualityWarnings } from "@/lib/intelligence/article-quality";
+import { requireOperatorPage } from "@/lib/operator-auth";
 import {
   getComparisonCandidateOpenAITextModels,
   getOpenAITextModelLabel,
 } from "@/lib/openai-models";
+
+export const dynamic = "force-dynamic";
 
 type ArticlePageProps = {
   params: Promise<{ id: string }>;
@@ -62,6 +66,7 @@ function qualitySignal(value: boolean) {
 }
 
 export default async function ArticlePage({ params, searchParams }: ArticlePageProps) {
+  await requireOperatorPage();
   const { id } = await params;
   const article = await getArticleById(id);
 
@@ -84,6 +89,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
   const query = searchParams ? await searchParams : undefined;
   const message = firstValue(query?.message);
   const error = firstValue(query?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(query?.ref));
   const sourceOpportunity = article.contentOpportunities[0];
   const qualityWarnings = parseArticleQualityWarnings(article.qualityWarnings);
   const comparisonModels = getComparisonCandidateOpenAITextModels(article.openAiTextModel);
@@ -122,7 +128,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
         </div>
 
         {message ? <p className="message message-success mb-4">{message}</p> : null}
-        {error ? <p className="message message-error mb-4">{error}</p> : null}
+        {error ? <p className="message message-error mb-4">{errorMessage}</p> : null}
 
         <section className="panel mb-6 rounded-[1.5rem] p-4 md:p-5">
           <div className="flex flex-wrap items-center justify-between gap-4">

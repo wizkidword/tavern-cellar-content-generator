@@ -7,9 +7,13 @@ import {
   generateOpportunityIdeasAction,
 } from "@/app/actions";
 import { FoundryNav } from "@/app/foundry-nav";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import { DeleteOpportunityButton } from "@/app/opportunities/delete-opportunity-button";
 import { canDeleteOpportunity } from "@/lib/intelligence/opportunities";
 import { getOpportunityListData, parseScoreReasons } from "@/lib/intelligence/read-models";
+import { requireOperatorPage } from "@/lib/operator-auth";
+
+export const dynamic = "force-dynamic";
 
 type OpportunitiesPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -24,9 +28,11 @@ function statusClassName(status: string) {
 }
 
 export default async function OpportunitiesPage({ searchParams }: OpportunitiesPageProps) {
+  await requireOperatorPage();
   const params = searchParams ? await searchParams : undefined;
   const message = firstValue(params?.message);
   const error = firstValue(params?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(params?.ref));
   const selectedCategoryId = firstValue(params?.categoryId) ?? "";
   const selectedStatus = firstValue(params?.status) ?? "";
   const selectedRisk = firstValue(params?.risk) ?? "";
@@ -52,7 +58,7 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
             </h1>
 
             {message ? <p className="message message-success mb-4">{message}</p> : null}
-            {error ? <p className="message message-error mb-4">{error}</p> : null}
+            {error ? <p className="message message-error mb-4">{errorMessage}</p> : null}
 
             <form action={createWordPressCategoryAction} className="mb-6 space-y-4 border-b border-[var(--line)] pb-6">
               <div>

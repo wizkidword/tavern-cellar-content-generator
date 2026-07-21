@@ -5,7 +5,10 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 
+import { AppError } from "@/lib/errors/app-error";
 import { getServerEnv, requireFalEnv, requireOpenAIEnv } from "@/lib/env";
+import { fetchWithPolicy, withOperationTimeout } from "@/lib/http/fetch-policy";
+import { readSafeRemoteImage, validateImageBuffer } from "@/lib/images/validate-image";
 import {
   DEFAULT_FAL_IMAGE_MODEL,
   DEFAULT_FAL_IMAGE_QUALITY,
@@ -229,7 +232,9 @@ export function buildOpenAIImageGenerationRequest(prompt: string, modelInput?: u
 }
 
 export async function normalizeFeaturedImageBuffer(buffer: Buffer) {
-  return sharp(buffer)
+  const validated = await validateImageBuffer(buffer);
+
+  return sharp(validated)
     .resize(FEATURED_IMAGE_WIDTH, FEATURED_IMAGE_HEIGHT, {
       fit: "cover",
       position: "attention",
@@ -268,7 +273,11 @@ async function generateOpenAIFeaturedImage(
   modelInput?: unknown,
 ) {
   const env = requireOpenAIEnv();
-  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  const client = new OpenAI({
+    apiKey: env.OPENAI_API_KEY,
+    maxRetries: 0,
+    timeout: 45_000,
+  });
   const imageRequest = buildOpenAIImageGenerationRequest(
     prompt,
     modelInput ?? env.OPENAI_IMAGE_MODEL,
@@ -277,7 +286,7 @@ async function generateOpenAIFeaturedImage(
   const image = imageResponse.data?.[0];
 
   if (!image?.b64_json) {
-    throw new Error("The OpenAI image model did not return base64 image data.");
+    throw new AppError("AI_RESPONSE_INVALID");
   }
 
   return writeGeneratedFeaturedImage({
@@ -298,30 +307,38 @@ async function generateFalFeaturedImage(
     credentials: env.FAL_KEY,
   });
 
-  const result = await fal.subscribe(modelId, {
-    input: buildFalFeaturedImageInput(prompt, {
-      modelId,
-      quality: env.FAL_IMAGE_QUALITY,
+  const result = await withOperationTimeout(
+    fal.subscribe(modelId, {
+      input: buildFalFeaturedImageInput(prompt, {
+        modelId,
+        quality: env.FAL_IMAGE_QUALITY,
+      }),
     }),
-  });
+    45_000,
+    "IMAGE_OPERATION_FAILED",
+  );
   const data = result.data as FalImageResponse;
   const image = data.images?.[0];
 
   if (!image?.url) {
-    throw new Error("fal.ai did not return an image URL.");
+    throw new AppError("IMAGE_OPERATION_FAILED");
   }
 
-  const imageResponse = await fetch(image.url, {
+  const imageResponse = await fetchWithPolicy(image.url, {
     cache: "no-store",
+  }, {
+    service: "image",
+    timeoutMs: 20_000,
+    retries: 1,
   });
 
   if (!imageResponse.ok) {
-    throw new Error(`fal.ai image download failed: ${imageResponse.status} ${imageResponse.statusText}`);
+    throw new AppError("IMAGE_DOWNLOAD_INVALID", { retryable: imageResponse.status >= 500 });
   }
 
   return writeGeneratedFeaturedImage({
     articleId,
-    buffer: Buffer.from(await imageResponse.arrayBuffer()),
+    buffer: await readSafeRemoteImage(imageResponse),
     imageModel: modelId,
   });
 }

@@ -11,6 +11,7 @@ import {
 import { DeleteOpportunityButton } from "@/app/opportunities/delete-opportunity-button";
 import { FoundryNav } from "@/app/foundry-nav";
 import { MAX_ARTICLE_BODY_IMAGE_COUNT } from "@/lib/article-body-images";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import {
   DEFAULT_FAL_IMAGE_MODEL,
   DEFAULT_FEATURED_IMAGE_PROVIDER,
@@ -24,10 +25,13 @@ import {
   getOpportunityWorkflowState,
 } from "@/lib/intelligence/opportunities";
 import { getOpportunityById, parseScoreReasons } from "@/lib/intelligence/read-models";
+import { requireOperatorPage } from "@/lib/operator-auth";
 import {
   DEFAULT_OPENAI_TEXT_MODEL,
   OPENAI_TEXT_MODEL_OPTIONS,
 } from "@/lib/openai-models";
+
+export const dynamic = "force-dynamic";
 
 type OpportunityPageProps = {
   params: Promise<{ id: string }>;
@@ -43,6 +47,7 @@ function statusClassName(status: string) {
 }
 
 export default async function OpportunityPage({ params, searchParams }: OpportunityPageProps) {
+  await requireOperatorPage();
   const { id } = await params;
   const opportunity = await getOpportunityById(id);
 
@@ -53,6 +58,7 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
   const query = searchParams ? await searchParams : undefined;
   const message = firstValue(query?.message);
   const error = firstValue(query?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(query?.ref));
   const reasons = parseScoreReasons(opportunity.scoreReasons);
   const workflowState = getOpportunityWorkflowState({
     status: opportunity.status,
@@ -95,7 +101,7 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
           </div>
 
           {message ? <p className="message message-success mt-5">{message}</p> : null}
-          {error ? <p className="message message-error mt-5">{error}</p> : null}
+          {error ? <p className="message message-error mt-5">{errorMessage}</p> : null}
           {opportunity.duplicateRiskLabel === "too_similar" ? (
             <p className="message message-error mt-5">
               This opportunity is very close to existing coverage. Revise the angle before generating unless

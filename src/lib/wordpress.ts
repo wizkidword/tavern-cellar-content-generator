@@ -4,12 +4,15 @@ import {
   type Category,
   type Prisma,
 } from "@prisma/client";
-import { marked } from "marked";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { prisma } from "@/lib/db";
+import { AppError } from "@/lib/errors/app-error";
 import { getServerEnv, requireWordPressAuthEnv } from "@/lib/env";
+import { fetchWithPolicy } from "@/lib/http/fetch-policy";
+import { renderSanitizedArticleHtml } from "@/lib/rendering/sanitize-html";
+import { serializeWordPressCategoryIds } from "@/lib/serialized-values";
 import { isAllowedAppCategorySlug } from "@/lib/category-config";
 import {
   buildCanonicalTopicKey,
@@ -90,29 +93,6 @@ function clampText(value: string, maxLength: number) {
   }
 
   return normalized.slice(0, maxLength).trim();
-}
-
-function summarizeWordPressErrorBody(rawBody: string, contentType: string | null) {
-  const looksLikeHtml =
-    contentType?.toLowerCase().includes("text/html") ||
-    /<\s*!doctype\s+html|<\s*html[\s>]/i.test(rawBody);
-
-  if (looksLikeHtml) {
-    return "WordPress returned an HTML error page instead of a compact REST API error. Check WordPress hosting, firewall, or security plugin rules for the REST media endpoint.";
-  }
-
-  const plainText = clampText(stripHtml(rawBody), 240);
-
-  return plainText || null;
-}
-
-function stripRawMarkdownHtml(value: string) {
-  return value
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<\/?[a-z][a-z0-9:-]*(?:\s+[^<>]*)?>/gi, "")
-    .trim();
 }
 
 function escapeHtmlAttribute(value: string) {
@@ -212,30 +192,28 @@ export async function buildWordPressPostContentHtml(input: {
   }>;
 }) {
   const contentWithBodyImages = replaceBodyImageMarkdownWithBlocks(
-    stripRawMarkdownHtml(input.contentMarkdown),
+    input.contentMarkdown,
     input.bodyImages ?? [],
   );
-  const htmlContent = await marked.parse(contentWithBodyImages);
+  const imageBlock = input.featuredImage?.sourceUrl.trim()
+    ? buildFeaturedImageBlockHtml(input.featuredImage)
+    : "";
+  const approvedImageUrls = [
+    input.featuredImage?.sourceUrl,
+    ...(input.bodyImages ?? []).map((image) => image.sourceUrl),
+  ].filter((url): url is string => Boolean(url?.trim()));
 
-  if (!input.featuredImage?.sourceUrl.trim()) {
-    return htmlContent;
-  }
-
-  const imageBlock = buildFeaturedImageBlockHtml(input.featuredImage);
-
-  return imageBlock ? `${imageBlock}\n\n${htmlContent}` : htmlContent;
+  return renderSanitizedArticleHtml({
+    markdown: imageBlock ? `${imageBlock}\n\n${contentWithBodyImages}` : contentWithBodyImages,
+    approvedImageUrls,
+  });
 }
 
 type WordPressErrorPayload = {
   code?: string;
-  message?: string;
-  data?: {
-    status?: number;
-  };
 };
 
-async function buildWordPressError(prefix: string, response: Response) {
-  const fallback = `${prefix}: ${response.status} ${response.statusText}`;
+async function buildWordPressError(response: Response) {
   const rawBody = await response.text();
 
   let payload: WordPressErrorPayload | null = null;
@@ -247,41 +225,34 @@ async function buildWordPressError(prefix: string, response: Response) {
   }
 
   const code = payload?.code;
-  const message = payload?.message;
-
   if (code === "rest_not_logged_in") {
-    return new Error(
-      `${prefix}: WordPress did not accept the current credentials. Check WORDPRESS_USERNAME and WORDPRESS_APP_PASSWORD, then create a fresh application password if needed.`,
-    );
+    return new AppError("WP_AUTH_FAILED");
   }
 
-  if (code === "rest_cannot_create") {
-    return new Error(
-      `${prefix}: WordPress authenticated the request, but this user cannot create content or upload media. Use an Administrator, Editor, or Author account with post and media permissions. Original message: ${message ?? "rest_cannot_create"}`,
-    );
-  }
+  return new AppError("WP_RESPONSE_INVALID", { retryable: response.status >= 500 });
+}
 
-  if (message) {
-    return new Error(`${prefix}: ${response.status} ${message}`);
-  }
+async function fetchWordPressRead(url: string, init: RequestInit = {}) {
+  return fetchWithPolicy(
+    url,
+    { ...init, cache: "no-store" },
+    { service: "wordpress", timeoutMs: 12_000, retries: 2 },
+  );
+}
 
-  if (rawBody) {
-    const bodySummary = summarizeWordPressErrorBody(rawBody, response.headers.get("content-type"));
-
-    return new Error(bodySummary ? `${fallback}. ${bodySummary}` : fallback);
-  }
-
-  return new Error(fallback);
+async function fetchWordPressWrite(url: string, init: RequestInit) {
+  return fetchWithPolicy(
+    url,
+    { ...init, cache: "no-store" },
+    { service: "wordpress", timeoutMs: 20_000, retries: 0, uncertainWrite: true },
+  );
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit) {
-  const response = await fetch(url, {
-    ...init,
-    cache: "no-store",
-  });
+  const response = await fetchWordPressRead(url, init);
 
   if (!response.ok) {
-    throw new Error(`WordPress request failed: ${response.status} ${response.statusText}`);
+    throw await buildWordPressError(response);
   }
 
   return response.json() as Promise<T>;
@@ -346,7 +317,7 @@ async function fetchPostsPage(input: {
   const statusParam = input.includePrivateStatuses
     ? "&status=publish,future,draft,pending,private"
     : "";
-  const response = await fetch(
+  const response = await fetchWordPressRead(
     wordpressApiUrl(
       `/posts?per_page=100&page=${input.page}${statusParam}&_fields=id,date,date_gmt,slug,link,categories,title,excerpt,status`,
     ),
@@ -509,7 +480,7 @@ export async function syncWordPressCatalog() {
         publishedAt: post.date ? new Date(post.date) : null,
         link: post.link,
         primaryCategoryId: primaryCategory?.id ?? null,
-        rawCategoryIds: JSON.stringify(post.categories),
+        rawCategoryIds: serializeWordPressCategoryIds(post.categories),
         lastSyncedAt: syncedAt,
       },
       update: {
@@ -527,7 +498,7 @@ export async function syncWordPressCatalog() {
         publishedAt: post.date ? new Date(post.date) : null,
         link: post.link,
         primaryCategoryId: primaryCategory?.id ?? null,
-        rawCategoryIds: JSON.stringify(post.categories),
+        rawCategoryIds: serializeWordPressCategoryIds(post.categories),
         lastSyncedAt: syncedAt,
       },
     });
@@ -575,14 +546,14 @@ export async function createWordPressCategory(input: {
   slug?: string | null;
   description?: string | null;
 }) {
-  const response = await fetch(wordpressApiUrl("/categories"), {
+  const response = await fetchWordPressWrite(wordpressApiUrl("/categories"), {
     method: "POST",
     headers: createAuthHeaders(),
     body: JSON.stringify(buildWordPressCategoryPayload(input)),
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("WordPress category creation failed", response);
+    throw await buildWordPressError(response);
   }
 
   return (await response.json()) as WordPressCategoryRecord;
@@ -603,7 +574,7 @@ async function getOrCreateTagIds(tagsValue: string) {
   const tagIds: number[] = [];
 
   for (const tagName of tagNames) {
-    const response = await fetch(wordpressApiUrl("/tags"), {
+    const response = await fetchWordPressWrite(wordpressApiUrl("/tags"), {
       method: "POST",
       headers: createAuthHeaders(),
       body: JSON.stringify({ name: tagName }),
@@ -629,14 +600,15 @@ async function getOrCreateTagIds(tagsValue: string) {
       continue;
     }
 
-    throw new Error(`Tag sync failed for "${tagName}": ${response.status} ${rawBody}`);
+    void rawBody;
+    throw new AppError("WP_RESPONSE_INVALID", { retryable: response.status >= 500 });
   }
 
   return tagIds;
 }
 
 async function detectYoastMetaSupport(postId: number, expectedMetaDescription: string) {
-  const response = await fetch(wordpressApiUrl(`/posts/${postId}?context=edit`), {
+  const response = await fetchWordPressRead(wordpressApiUrl(`/posts/${postId}?context=edit`), {
     headers: createAuthHeaders(),
     cache: "no-store",
   });
@@ -684,14 +656,14 @@ function buildMediaMetadata(article: Article) {
 }
 
 async function syncFeaturedMediaMetadata(mediaId: number, article: Article): Promise<FeaturedMediaInfo> {
-  const response = await fetch(wordpressApiUrl(`/media/${mediaId}`), {
+  const response = await fetchWordPressWrite(wordpressApiUrl(`/media/${mediaId}`), {
     method: "POST",
     headers: createAuthHeaders(),
     body: JSON.stringify(buildMediaMetadata(article)),
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("Media metadata sync failed", response);
+    throw await buildWordPressError(response);
   }
 
   const media = (await response.json()) as WordPressMediaRecord;
@@ -710,7 +682,7 @@ async function uploadFeaturedMedia(article: Article): Promise<FeaturedMediaInfo 
   const filePath = path.join(process.cwd(), "public", article.featuredImagePath.replace(/^\//, ""));
   const fileBuffer = await fs.readFile(filePath);
   const filename = path.basename(filePath);
-  const response = await fetch(wordpressApiUrl("/media"), {
+  const response = await fetchWordPressWrite(wordpressApiUrl("/media"), {
     method: "POST",
     headers: {
       ...createAuthHeaders(article.featuredImageMimeType ?? "image/png"),
@@ -720,7 +692,7 @@ async function uploadFeaturedMedia(article: Article): Promise<FeaturedMediaInfo 
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("Media upload failed", response);
+    throw await buildWordPressError(response);
   }
 
   const media = (await response.json()) as WordPressMediaRecord;
@@ -757,14 +729,14 @@ async function syncBodyMediaMetadata(
   article: Article,
   image: ArticleBodyImage,
 ): Promise<FeaturedMediaInfo> {
-  const response = await fetch(wordpressApiUrl(`/media/${mediaId}`), {
+  const response = await fetchWordPressWrite(wordpressApiUrl(`/media/${mediaId}`), {
     method: "POST",
     headers: createAuthHeaders(),
     body: JSON.stringify(buildBodyMediaMetadata(article, image)),
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("Body image metadata sync failed", response);
+    throw await buildWordPressError(response);
   }
 
   const media = (await response.json()) as WordPressMediaRecord;
@@ -782,7 +754,7 @@ async function uploadBodyMedia(article: Article, image: ArticleBodyImage): Promi
     const filePath = path.join(process.cwd(), "public", image.publicPath.replace(/^\//, ""));
     const fileBuffer = await fs.readFile(filePath);
     const filename = path.basename(filePath);
-    const response = await fetch(wordpressApiUrl("/media"), {
+    const response = await fetchWordPressWrite(wordpressApiUrl("/media"), {
       method: "POST",
       headers: {
         ...createAuthHeaders(image.mimeType),
@@ -792,7 +764,7 @@ async function uploadBodyMedia(article: Article, image: ArticleBodyImage): Promi
     });
 
     if (!response.ok) {
-      throw await buildWordPressError("Body image upload failed", response);
+      throw await buildWordPressError(response);
     }
 
     const media = (await response.json()) as WordPressMediaRecord;
@@ -936,14 +908,14 @@ export async function pushArticleToWordPress(
     ? wordpressApiUrl(`/posts/${article.wpPostId}`)
     : wordpressApiUrl("/posts");
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWordPressWrite(endpoint, {
     method: "POST",
     headers: createAuthHeaders(),
     body: JSON.stringify(body),
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("WordPress post sync failed", response);
+    throw await buildWordPressError(response);
   }
 
   const payload = (await response.json()) as {

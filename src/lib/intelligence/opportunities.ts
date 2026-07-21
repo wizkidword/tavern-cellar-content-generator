@@ -34,6 +34,10 @@ import {
 } from "@/lib/featured-image";
 import { generateContentOpportunityIdeas } from "@/lib/openai";
 import { type OpenAITextModel } from "@/lib/openai-models";
+import {
+  parseWordPressCategoryIds,
+  serializeStringArray,
+} from "@/lib/serialized-values";
 import { normalizeTopicValue } from "@/lib/topic-utils";
 
 type BuildOpportunityInsightInput = {
@@ -98,23 +102,6 @@ function requireTrimmed(value: string, fieldName: string) {
   return trimmed;
 }
 
-function parseRawCategoryIds(rawCategoryIds: string) {
-  try {
-    const parsed = JSON.parse(rawCategoryIds) as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is number => typeof item === "number");
-    }
-  } catch {
-    // Older rows can be plain comma-separated strings.
-  }
-
-  return rawCategoryIds
-    .split(/[^0-9]+/)
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value));
-}
-
 function localCategoryIdsForSitePost(
   post: { primaryCategoryId: number | null; rawCategoryIds: string },
   wpCategoryMap: Map<number, number>,
@@ -125,7 +112,7 @@ function localCategoryIdsForSitePost(
     ids.add(post.primaryCategoryId);
   }
 
-  for (const wpCategoryId of parseRawCategoryIds(post.rawCategoryIds)) {
+  for (const wpCategoryId of parseWordPressCategoryIds(post.rawCategoryIds)) {
     const localId = wpCategoryMap.get(wpCategoryId);
 
     if (localId) {
@@ -457,7 +444,7 @@ export async function createOpportunityFromInput(input: CreateOpportunityInput) 
           publishabilityScore: insight.score.publishabilityScore,
           categoryBalanceScore: insight.score.categoryBalanceScore,
           overallScore: insight.score.overallScore,
-          scoreReasons: JSON.stringify(insight.score.reasons),
+          scoreReasons: serializeStringArray(insight.score.reasons),
           duplicateRiskLabel: insight.duplicateAssessment.label,
         },
       });

@@ -1,4 +1,5 @@
 import { normalizeSearchText } from "@/lib/intelligence/text";
+import { parseStringArray } from "@/lib/serialized-values";
 
 export type ArticleQualityInput = {
   title: string;
@@ -155,15 +156,5 @@ export function analyzeArticleQuality(input: ArticleQualityInput): ArticleQualit
 }
 
 export function parseArticleQualityWarnings(value: string | null | undefined) {
-  try {
-    const parsed = JSON.parse(value ?? "[]") as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is string => typeof item === "string");
-    }
-  } catch {
-    return [];
-  }
-
-  return [];
+  return parseStringArray(value);
 }

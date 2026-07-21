@@ -2,7 +2,11 @@ import { formatDistanceToNow } from "date-fns";
 
 import { refreshTopicClustersAction, syncWordPressCatalogAction } from "@/app/actions";
 import { FoundryNav } from "@/app/foundry-nav";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import { getIntelligenceData } from "@/lib/intelligence/read-models";
+import { requireOperatorPage } from "@/lib/operator-auth";
+
+export const dynamic = "force-dynamic";
 
 type IntelligencePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -25,9 +29,11 @@ function formatClusterItemType(value: string) {
 }
 
 export default async function IntelligencePage({ searchParams }: IntelligencePageProps) {
+  await requireOperatorPage();
   const params = searchParams ? await searchParams : undefined;
   const message = firstValue(params?.message);
   const error = firstValue(params?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(params?.ref));
   const intelligence = await getIntelligenceData();
 
   return (
@@ -58,7 +64,7 @@ export default async function IntelligencePage({ searchParams }: IntelligencePag
           </div>
 
           {message ? <p className="message message-success mt-5">{message}</p> : null}
-          {error ? <p className="message message-error mt-5">{error}</p> : null}
+          {error ? <p className="message message-error mt-5">{errorMessage}</p> : null}
 
           <div className="metric-grid mt-8">
             <div className="metric-card">

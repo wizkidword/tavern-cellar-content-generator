@@ -48,5 +48,9 @@ next-env.d.ts
 /public/generated/
 /prisma/prisma/*.db
 /prisma/prisma/*.db-*
+/prisma/backups/
+/prisma/shadow-*.db
 /.playwright-mcp/
+/.playwright-cli/
+/output/playwright/
 /foundry-*.png

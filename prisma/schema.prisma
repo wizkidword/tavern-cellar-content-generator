@@ -256,6 +256,8 @@ model OpportunitySimilarPost {
   @@index([sitePostId])
   @@index([articleId])
   @@index([similarity])
+  @@unique([opportunityId, sitePostId])
+  @@unique([opportunityId, articleId])
 }
 
 model TopicCluster {
@@ -295,4 +297,7 @@ model TopicClusterItem {
   @@index([sitePostId])
   @@index([articleId])
   @@index([opportunityId])
+  @@unique([topicClusterId, sitePostId])
+  @@unique([topicClusterId, articleId])
+  @@unique([topicClusterId, opportunityId])
 }

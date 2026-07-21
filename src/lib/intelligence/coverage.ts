@@ -1,3 +1,5 @@
+import { parseWordPressCategoryIds } from "@/lib/serialized-values";
+
 export type CoverageBalanceLabel = "quiet" | "developing" | "healthy" | "overloaded";
 
 export type CoverageCategory = {
@@ -51,27 +53,10 @@ export type CoverageLane = {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-function parseRawCategoryIds(rawCategoryIds: string) {
-  try {
-    const parsed = JSON.parse(rawCategoryIds) as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is number => typeof item === "number");
-    }
-  } catch {
-    // Fall through to plain string parsing for older or hand-authored rows.
-  }
-
-  return rawCategoryIds
-    .split(/[^0-9]+/)
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value));
-}
-
 function sitePostBelongsToCategory(post: CoverageSitePost, category: CoverageCategory) {
   return (
     post.primaryCategoryId === category.id ||
-    parseRawCategoryIds(post.rawCategoryIds).includes(category.wpCategoryId)
+    parseWordPressCategoryIds(post.rawCategoryIds).includes(category.wpCategoryId)
   );
 }
 

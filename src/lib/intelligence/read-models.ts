@@ -4,19 +4,10 @@ import { isActiveAppCategory, sortCategoriesForApp } from "@/lib/category-config
 import { prisma } from "@/lib/db";
 import { buildTopicClusterDrafts } from "@/lib/intelligence/clusters";
 import { buildCoverageMap } from "@/lib/intelligence/coverage";
+import { parseStringArray } from "@/lib/serialized-values";
 
 export function parseScoreReasons(value: string) {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is string => typeof item === "string");
-    }
-  } catch {
-    return [];
-  }
-
-  return [];
+  return parseStringArray(value);
 }
 
 export async function getIntelligenceData() {

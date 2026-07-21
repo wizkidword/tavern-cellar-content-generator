@@ -56,6 +56,11 @@ import {
   formatDateTimeLocal,
   pickRandomWordPressScheduleSlot,
 } from "@/lib/random-schedule";
+import {
+  parseWordPressCategoryIds,
+  serializeStringArray,
+} from "@/lib/serialized-values";
+import { articleReviewFormSchema, parseFormData } from "@/lib/validation/schemas";
 
 type GenerateArticleRequest = {
   categoryId: number;
@@ -393,25 +398,8 @@ async function getPlanningCategory(categoryId: number) {
   return category;
 }
 
-function parseRawCategoryIds(rawCategoryIds: string) {
-  try {
-    const parsed = JSON.parse(rawCategoryIds) as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is number => typeof item === "number");
-    }
-  } catch {
-    // Older rows can be plain comma-separated strings.
-  }
-
-  return rawCategoryIds
-    .split(/[^0-9]+/)
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value));
-}
-
 function rawCategoryIdsInclude(rawCategoryIds: string, wpCategoryId: number) {
-  return parseRawCategoryIds(rawCategoryIds).includes(wpCategoryId);
+  return parseWordPressCategoryIds(rawCategoryIds).includes(wpCategoryId);
 }
 
 function sitePostBelongsToCategory(
@@ -434,7 +422,7 @@ function localCategoryIdsForSitePost(
     ids.add(post.primaryCategoryId);
   }
 
-  for (const wpCategoryId of parseRawCategoryIds(post.rawCategoryIds)) {
+  for (const wpCategoryId of parseWordPressCategoryIds(post.rawCategoryIds)) {
     const localId = wpCategoryMap.get(wpCategoryId);
 
     if (localId) {
@@ -726,7 +714,7 @@ export async function createArticle(request: GenerateArticleRequest) {
       qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
       qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
       qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
-      qualityWarnings: JSON.stringify(quality.warnings),
+      qualityWarnings: serializeStringArray(quality.warnings),
     },
     include: articleWithBodyImagesInclude(),
   });
@@ -882,7 +870,7 @@ export async function generateArticleModelComparison(
       qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
       qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
       qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
-      qualityWarnings: JSON.stringify(quality.warnings),
+      qualityWarnings: serializeStringArray(quality.warnings),
     },
     update: {
       title: generated.title,
@@ -905,7 +893,7 @@ export async function generateArticleModelComparison(
       qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
       qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
       qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
-      qualityWarnings: JSON.stringify(quality.warnings),
+      qualityWarnings: serializeStringArray(quality.warnings),
     },
   });
 }
@@ -945,13 +933,7 @@ export async function suggestAngles(input: {
   });
 }
 
-function readString(formData: FormData, key: string) {
-  return String(formData.get(key) ?? "").trim();
-}
-
-function readOptionalSchedule(formData: FormData, key: string) {
-  const value = readString(formData, key);
-
+function readOptionalSchedule(value: string) {
   if (!value) {
     return {
       date: null,
@@ -1002,21 +984,15 @@ function ensureFutureSchedule<T extends {
 }
 
 export async function saveArticleReview(articleId: string, formData: FormData) {
-  const categoryId = Number(readString(formData, "categoryId"));
-  const title = readString(formData, "title");
-  const angle = readString(formData, "angle");
-  const primaryKeyword = readString(formData, "primaryKeyword");
-  const slug = slugify(readString(formData, "slug") || title);
-  const tags = splitListInput(readString(formData, "tags")).join(", ");
-  const internalLinks = splitListInput(readString(formData, "internalLinks")).join("\n");
-  const notes = readString(formData, "notes");
-  const metaTitle = readString(formData, "metaTitle");
-  const metaDescription = readString(formData, "metaDescription");
-  const excerpt = readString(formData, "excerpt");
-  const featuredImagePrompt = readString(formData, "featuredImagePrompt");
-  const featuredImageAlt = readString(formData, "featuredImageAlt");
-  const contentMarkdown = readString(formData, "contentMarkdown");
-  const schedule = readOptionalSchedule(formData, "scheduledFor");
+  const input = parseFormData(articleReviewFormSchema, formData);
+  const { categoryId, title, angle, primaryKeyword, notes, metaTitle, metaDescription, excerpt } = input;
+  const slug = slugify(input.slug || title);
+  const tags = splitListInput(input.tags).join(", ");
+  const internalLinks = splitListInput(input.internalLinks).join("\n");
+  const featuredImagePrompt = input.featuredImagePrompt;
+  const featuredImageAlt = input.featuredImageAlt;
+  const contentMarkdown = input.contentMarkdown;
+  const schedule = readOptionalSchedule(input.scheduledFor);
   const quality = analyzeArticleQuality({
     title,
     primaryKeyword,
@@ -1066,20 +1042,21 @@ export async function saveArticleReview(articleId: string, formData: FormData) {
       qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
       qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
       qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
-      qualityWarnings: JSON.stringify(quality.warnings),
+      qualityWarnings: serializeStringArray(quality.warnings),
     },
     include: articleWithBodyImagesInclude(),
   });
 }
 
 export async function regenerateFeaturedImage(articleId: string, formData: FormData) {
+  const input = parseFormData(articleReviewFormSchema, formData);
   const article = await saveArticleReview(articleId, formData);
   const image = await generateFeaturedImageAsset(
     article.id,
     article.featuredImagePrompt,
-    formData.get("imageProvider"),
-    formData.get("falImageModel"),
-    formData.get("openAiImageModel"),
+    input.imageProvider,
+    input.falImageModel,
+    input.openAiImageModel,
   );
 
   const updated = await prisma.article.update({
@@ -1101,16 +1078,15 @@ export async function regenerateFeaturedImage(articleId: string, formData: FormD
 }
 
 export async function regenerateArticleBodyImages(articleId: string, formData: FormData) {
+  const input = parseFormData(articleReviewFormSchema, formData);
   const article = await saveArticleReview(articleId, formData);
 
   return generateBodyImagesForArticle({
     article,
-    count: formData.get("bodyImageCount"),
-    imageProvider: resolveFeaturedImageProvider(
-      formData.get("bodyImageProvider") ?? formData.get("imageProvider"),
-    ),
-    falImageModel: formData.get("bodyImageFalModel") ?? formData.get("falImageModel"),
-    openAiImageModel: formData.get("bodyOpenAiImageModel") ?? formData.get("openAiImageModel"),
+    count: input.bodyImageCount,
+    imageProvider: resolveFeaturedImageProvider(input.bodyImageProvider ?? input.imageProvider),
+    falImageModel: input.bodyImageFalModel ?? input.falImageModel,
+    openAiImageModel: input.bodyOpenAiImageModel ?? input.openAiImageModel,
     replaceExisting: true,
   });
 }

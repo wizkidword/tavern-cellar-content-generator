@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { generateArticleAction } from "@/app/actions";
@@ -30,22 +30,31 @@ type NewArticleFormProps = {
 
 type AssistResponse = {
   suggestions?: string[];
-  error?: string;
+  error?: string | { code: string; correlationId?: string; message: string };
 };
 
-async function postAssistRequest(pathname: string, body: Record<string, unknown>) {
+function assistErrorMessage(error: AssistResponse["error"]) {
+  return typeof error === "string" ? error : error?.message;
+}
+
+async function postAssistRequest(
+  pathname: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+) {
   const response = await fetch(pathname, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
+    signal,
   });
 
   const payload = (await response.json()) as AssistResponse;
 
   if (!response.ok) {
-    throw new Error(payload.error || "The AI helper could not complete that request.");
+    throw new Error(assistErrorMessage(payload.error) || "The AI helper could not complete that request.");
   }
 
   return payload.suggestions ?? [];
@@ -77,6 +86,15 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
   const [assistError, setAssistError] = useState("");
   const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
   const [isGeneratingAngles, setIsGeneratingAngles] = useState(false);
+  const keywordRequestController = useRef<AbortController | null>(null);
+  const angleRequestController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      keywordRequestController.current?.abort();
+      angleRequestController.current?.abort();
+    };
+  }, []);
 
   const selectedCategory = useMemo(
     () => categories.find((category) => String(category.id) === categoryId) ?? null,
@@ -84,6 +102,10 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
   );
 
   async function handleGenerateKeywords() {
+    if (isGeneratingKeywords) {
+      return;
+    }
+
     if (!categoryId) {
       setAssistError("Pick a category first, then AI can suggest primary keywords.");
       return;
@@ -91,25 +113,37 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
 
     setAssistError("");
     setIsGeneratingKeywords(true);
+    keywordRequestController.current?.abort();
+    const controller = new AbortController();
+    keywordRequestController.current = controller;
 
     try {
       const suggestions = await postAssistRequest("/api/assist/keywords", {
         categoryId: Number(categoryId),
         notes,
-      });
+      }, controller.signal);
 
       setKeywordSuggestions(suggestions);
       if (!primaryKeyword && suggestions[0]) {
         setPrimaryKeyword(suggestions[0]);
       }
     } catch (error) {
-      setAssistError(error instanceof Error ? error.message : "Keyword generation failed.");
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setAssistError(error instanceof Error ? error.message : "Keyword generation failed.");
+      }
     } finally {
-      setIsGeneratingKeywords(false);
+      if (keywordRequestController.current === controller) {
+        keywordRequestController.current = null;
+        setIsGeneratingKeywords(false);
+      }
     }
   }
 
   async function handleGenerateAngles() {
+    if (isGeneratingAngles) {
+      return;
+    }
+
     if (!categoryId) {
       setAssistError("Pick a category first, then AI can suggest angles.");
       return;
@@ -122,26 +156,36 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
 
     setAssistError("");
     setIsGeneratingAngles(true);
+    angleRequestController.current?.abort();
+    const controller = new AbortController();
+    angleRequestController.current = controller;
 
     try {
       const suggestions = await postAssistRequest("/api/assist/angles", {
         categoryId: Number(categoryId),
         primaryKeyword,
         notes,
-      });
+      }, controller.signal);
 
       setAngleSuggestions(suggestions);
       if (!angle && suggestions[0]) {
         setAngle(suggestions[0]);
       }
     } catch (error) {
-      setAssistError(error instanceof Error ? error.message : "Angle generation failed.");
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setAssistError(error instanceof Error ? error.message : "Angle generation failed.");
+      }
     } finally {
-      setIsGeneratingAngles(false);
+      if (angleRequestController.current === controller) {
+        angleRequestController.current = null;
+        setIsGeneratingAngles(false);
+      }
     }
   }
 
   function resetSuggestionsForCategory(nextCategoryId: string) {
+    keywordRequestController.current?.abort();
+    angleRequestController.current?.abort();
     setCategoryId(nextCategoryId);
     setPrimaryKeyword("");
     setAngle("");
@@ -185,7 +229,9 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
             </p>
           </div>
           <button
+            aria-busy={isGeneratingKeywords}
             className="action-secondary px-4 py-3 text-sm"
+            disabled={isGeneratingKeywords}
             onClick={handleGenerateKeywords}
             type="button"
           >
@@ -228,7 +274,9 @@ export function NewArticleForm({ categories }: NewArticleFormProps) {
             </p>
           </div>
           <button
+            aria-busy={isGeneratingAngles}
             className="action-secondary px-4 py-3 text-sm"
+            disabled={isGeneratingAngles}
             onClick={handleGenerateAngles}
             type="button"
           >

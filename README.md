@@ -32,7 +32,10 @@ OPENAI_IMAGE_MODEL="gpt-image-2"
 WORDPRESS_URL="https://taverncellar.com"
 WORDPRESS_USERNAME="your-wordpress-username"
 WORDPRESS_APP_PASSWORD="your-wordpress-application-password"
-FOUNDRY_OPERATOR_TOKEN=""
+FOUNDRY_OPERATOR_TOKEN="replace-with-a-strong-operator-credential"
+SESSION_SECRET="replace-with-at-least-32-random-bytes"
+SESSION_MAX_AGE_HOURS="12"
+APP_ORIGIN="http://127.0.0.1:3000"
 ```
 
 Important:
@@ -44,20 +47,35 @@ Important:
 - fal.ai image generation can use `fal-ai/flux-2`, `fal-ai/flux-2-pro`, or `fal-ai/flux-2-flex`. `FAL_IMAGE_MODEL` is the default when a screen does not send an explicit model choice.
 - For WordPress publishing, use an application password for the account that should create posts.
 - Leaving spaces in the WordPress application password inside `.env` is fine; the app strips them before authenticating.
-- Foundry allows local `localhost` / `127.0.0.1` use by default. If you expose it remotely, set `FOUNDRY_OPERATOR_TOKEN` and send that value as `x-foundry-operator-token` or a `foundry_operator_token` cookie.
+- Set `FOUNDRY_OPERATOR_TOKEN` to a unique credential of at least 16 characters. Foundry uses it only on the login page and never stores it in browser-visible state.
+- Set `SESSION_SECRET` to at least 32 random bytes. You can generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
+- `APP_ORIGIN` must match the URL used to open Foundry. The included launcher binds to `127.0.0.1` by default and opens the matching origin.
+- The supported `npm run dev` and `npm run start` commands refuse a non-loopback launch without valid operator-session configuration; a non-loopback `APP_ORIGIN` is also checked at server startup. Direct remote binding is unsupported for this local-first app.
+- Foundry never treats `Host`, `Origin`, `X-Forwarded-Host`, `X-Forwarded-For`, or a custom header as proof of operator identity. Every page, Server Action, and API route requires the signed session created at login.
 
 ## Local setup
 
 ```bash
 npm install
 npm run db:generate
-npm run db:push
+npm run db:migrate
 npm run dev
 ```
 
-Then open `http://localhost:3000`.
+Then open `http://127.0.0.1:3000`.
+
+Sign in at `/login` with `FOUNDRY_OPERATOR_TOKEN` after the server starts.
 
 On Windows, you can also double-click `Launch-Tavern-Cellar-Foundry.bat` from the project folder. It opens the existing local server if one is already running, or prepares the database, starts the server, and opens `http://127.0.0.1:3000`.
+
+See [docs/implementation-status.md](docs/implementation-status.md) for the active security and reliability implementation plan.
+
+## Database safety
+
+- `npm run db:migrate` creates a timestamped SQLite backup before it baselines an existing database or applies a pending migration.
+- `npm run db:backup` creates an additional manual backup. Backups are stored in `prisma/backups/` and are intentionally ignored by Git.
+- `npm run start` runs the same safe migration check before starting the production server. For local schema development, use `npm run db:migrate:dev` instead of `prisma db push`.
+- To restore a backup: stop Foundry, make a copy of the current database, then replace `prisma/prisma/dev.db` with the chosen file from `prisma/backups/`. Restart Foundry with `npm run db:migrate` so Prisma can confirm the migration history.
 
 ## Workflow
 

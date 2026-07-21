@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { AppError } from "@/lib/errors/app-error";
 import {
   buildWordPressPostContentHtml,
   buildWordPressPostTimingFields,
@@ -21,11 +22,11 @@ test("places the uploaded featured image at the top of the WordPress post conten
     },
   });
 
-  assert.ok(html.startsWith("<!-- wp:image"));
-  assert.match(html, /"id":42/);
+  assert.ok(html.trimStart().startsWith('<figure class="wp-block-image size-full">'));
+  assert.match(html, /class="wp-image-42"/);
   assert.match(html, /src="https:\/\/taverncellar\.test\/wp-content\/uploads\/hero\.png"/);
   assert.match(html, /alt="A neon tavern sign &amp; &quot;cellar&quot; doorway"/);
-  assert.ok(html.indexOf("<!-- wp:image") < html.indexOf("<h2>Opening</h2>"));
+  assert.ok(html.indexOf("wp-image-42") < html.indexOf("<h2>Opening</h2>"));
 });
 
 test("leaves WordPress post content unchanged when there is no featured image URL", async () => {
@@ -62,7 +63,7 @@ test("replaces generated body image markdown with uploaded WordPress media block
     ],
   });
 
-  assert.match(html, /"id":77/);
+  assert.match(html, /class="wp-image-77"/);
   assert.match(html, /src="https:\/\/taverncellar\.test\/wp-content\/uploads\/body-image\.png"/);
   assert.doesNotMatch(html, /src="\/generated\/body-image\.png"/);
   assert.ok(html.indexOf("<h2>Opening</h2>") < html.indexOf("wp-image-77"));
@@ -114,7 +115,7 @@ test("ignores invalid WordPress scheduled date values", () => {
   );
 });
 
-test("summarizes HTML media upload failures without leaking the whole page", async () => {
+test("maps HTML media upload failures to a stable error without leaking the response", async () => {
   const originalFetch = global.fetch;
   const originalWordPressUrl = process.env.WORDPRESS_URL;
   const originalWordPressUsername = process.env.WORDPRESS_USERNAME;
@@ -177,11 +178,10 @@ test("summarizes HTML media upload failures without leaking the whole page", asy
           },
         ),
       (error) => {
-        assert.ok(error instanceof Error);
-        assert.match(error.message, /Media upload failed: 403 Forbidden/);
-        assert.match(error.message, /HTML error page/i);
+        assert.ok(error instanceof AppError);
+        assert.equal(error.code, "WP_RESPONSE_INVALID");
         assert.doesNotMatch(error.message, /<!DOCTYPE|<html|Security plugin response/i);
-        assert.ok(error.message.length < 360);
+        assert.equal(error.message, "WordPress could not complete that request.");
         return true;
       },
     );

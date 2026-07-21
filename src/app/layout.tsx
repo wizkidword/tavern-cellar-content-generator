@@ -15,6 +15,10 @@ const fraunces = Fraunces({
 export const metadata: Metadata = {
   title: "Tavern Cellar Foundry",
   description: "Private SEO content generator and WordPress publishing workspace for Tavern Cellar.",
+  robots: {
+    index: false,
+    follow: false,
+  },
 };
 
 export default function RootLayout({

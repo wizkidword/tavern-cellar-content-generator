@@ -6,7 +6,11 @@ import {
 import { FoundryNav } from "@/app/foundry-nav";
 import { NewArticleForm } from "@/app/new-article-form";
 import { getDashboardData } from "@/lib/content-pipeline";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import { getOpenAITextModelLabel } from "@/lib/openai-models";
+import { requireOperatorPage } from "@/lib/operator-auth";
+
+export const dynamic = "force-dynamic";
 
 type HomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -21,9 +25,11 @@ function firstValue(value: string | string[] | undefined) {
 }
 
 export default async function HomePage({ searchParams }: HomePageProps) {
+  await requireOperatorPage();
   const params = searchParams ? await searchParams : undefined;
   const message = firstValue(params?.message);
   const error = firstValue(params?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(params?.ref));
   const dashboard = await getDashboardData();
 
   return (
@@ -83,7 +89,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
 
             {message ? <p className="message message-success mb-4">{message}</p> : null}
-            {error ? <p className="message message-error mb-4">{error}</p> : null}
+            {error ? <p className="message message-error mb-4">{errorMessage}</p> : null}
 
             <NewArticleForm categories={dashboard.categories} />
           </div>
