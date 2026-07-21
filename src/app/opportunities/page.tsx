@@ -180,7 +180,9 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
                   <option value="">All statuses</option>
                   <option value="IDEA">Idea</option>
                   <option value="APPROVED">Approved</option>
+                  <option value="GENERATING">Generating</option>
                   <option value="GENERATED">Generated</option>
+                  <option value="GENERATION_FAILED">Generation failed</option>
                   <option value="REJECTED">Rejected</option>
                   <option value="ARCHIVED">Archived</option>
                 </select>

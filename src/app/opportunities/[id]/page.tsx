@@ -65,6 +65,11 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
     generatedArticleId: opportunity.generatedArticleId,
   });
   const canDelete = canDeleteOpportunity(opportunity.status);
+  const canApprove = ["IDEA", "GENERATION_FAILED", "REJECTED", "ARCHIVED"].includes(
+    opportunity.status,
+  );
+  const canReject = ["IDEA", "APPROVED", "GENERATION_FAILED"].includes(opportunity.status);
+  const canArchive = opportunity.status !== "GENERATING" && opportunity.status !== "ARCHIVED";
   const scoreItems = [
     ["Overall", opportunity.overallScore],
     ["Brand", opportunity.tavernFitScore],
@@ -192,11 +197,13 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
             <section className="panel rounded-[2rem] p-6">
               <p className="eyebrow mb-3">Workflow</p>
               <div className="grid gap-3">
-                <form action={approveOpportunityAction.bind(null, opportunity.id)}>
-                  <button className="action-primary w-full" type="submit">
-                    Approve Opportunity
-                  </button>
-                </form>
+                {canApprove ? (
+                  <form action={approveOpportunityAction.bind(null, opportunity.id)}>
+                    <button className="action-primary w-full" type="submit">
+                      {opportunity.status === "GENERATION_FAILED" ? "Approve Retry" : "Approve Opportunity"}
+                    </button>
+                  </form>
+                ) : null}
 
                 {workflowState.mode === "open_generated_draft" && opportunity.generatedArticle ? (
                   <div className="rounded-[1.3rem] border border-[var(--line)] bg-black/10 p-4">
@@ -310,6 +317,14 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
                 {workflowState.mode === "locked" ? (
                   <p className="message message-error">{workflowState.message}</p>
                 ) : null}
+                {workflowState.mode === "generating" || workflowState.mode === "retry_required" ? (
+                  <p className="message message-error">
+                    {workflowState.message}
+                    {opportunity.generationErrorCode
+                      ? ` Last error: ${opportunity.generationErrorCode.replaceAll("_", " ").toLowerCase()}.`
+                      : ""}
+                  </p>
+                ) : null}
 
                 <Link className="action-secondary text-center" href="/opportunities">
                   Back to Opportunities
@@ -323,18 +338,24 @@ export default async function OpportunityPage({ params, searchParams }: Opportun
                   View Coverage Map
                 </Link>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <form action={rejectOpportunityAction.bind(null, opportunity.id)}>
-                    <button className="action-secondary w-full" type="submit">
-                      Reject
-                    </button>
-                  </form>
-                  <form action={archiveOpportunityAction.bind(null, opportunity.id)}>
-                    <button className="action-secondary w-full" type="submit">
-                      Archive
-                    </button>
-                  </form>
-                </div>
+                {canReject || canArchive ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {canReject ? (
+                      <form action={rejectOpportunityAction.bind(null, opportunity.id)}>
+                        <button className="action-secondary w-full" type="submit">
+                          Reject
+                        </button>
+                      </form>
+                    ) : null}
+                    {canArchive ? (
+                      <form action={archiveOpportunityAction.bind(null, opportunity.id)}>
+                        <button className="action-secondary w-full" type="submit">
+                          Archive
+                        </button>
+                      </form>
+                    ) : null}
+                  </div>
+                ) : null}
                 {canDelete ? (
                   <DeleteOpportunityButton
                     deleteAction={deleteOpportunityAction.bind(null, opportunity.id)}

@@ -80,6 +80,19 @@ Status: complete on 2026-07-21.
 - **Schema and migration notes:** Added `20260721193600_recoverable_image_assets`. The local database was backed up before the migration applied. Existing featured/body assets are marked as succeeded; legacy asset keys remain optional and new assets always get one.
 - **Verification:** Tests cover staged-file promotion, stable-marker removal after Markdown edits, structured retry state without mutating editorial notes, alt-text warnings, validation of generated image bytes, and existing bounded provider/download behavior. `npm test` has 128 passing tests; the SQLite migration rehearsal, TypeScript, ESLint, Prisma validation/diff, and production build are run for the final phase check.
 
+## Phase 7 — safe opportunity generation and durable topic clusters
+
+Status: complete on 2026-07-21.
+
+- **OPP-01 / OPP-02:** Opportunity draft generation now uses the explicit lifecycle `IDEA -> APPROVED -> GENERATING -> GENERATED`, with `GENERATION_FAILED` as the recoverable failure state. Only an approved opportunity can claim a generation slot. The claim is a conditional database update, so a concurrent request is rejected before it can create another draft. A saved `generatedArticleId` is always returned instead of regenerated, including legacy records.
+- **OPP-02:** AI draft preparation happens outside the SQLite transaction. The final article insert and opportunity link run in one short transaction; if the link cannot be saved, the article insert is rolled back too. Provider or persistence failures become a structured, retryable `GENERATION_FAILED` state with a safe error code and attempt time. Re-approval clears the safe failure code before a retry.
+- **OPP-03:** Opportunity scoring now has a shared `loadOpportunityContext` path. An AI planning pass loads the category, coverage, article, and WordPress post context once, then persists each scored idea against that same snapshot instead of repeatedly re-reading the full catalog.
+- **CLU-01 / CLU-02:** Topic clusters and their items now record whether they are `AUTO` or `MANUAL`. One transaction reconciles automatic clusters: it updates expected automatic items, removes stale automatic items, clears only their matching automatic opportunity assignment, and archives empty automatic clusters. Manual clusters/items are skipped entirely, so automation cannot rewrite editorial work.
+- **CLU-03:** The reviewed alias and strategy matching rules for automatic clusters now live in `src/lib/intelligence/cluster-catalog.ts`, rather than being embedded in reconciliation code.
+- **Interface:** Opportunity list filters show generating and failed states. The detail screen makes an active run, safe failure/retry path, and valid workflow actions clear without exposing provider details.
+- **Schema and migration notes:** Added `20260721201500_opportunity_lifecycle_and_cluster_ownership`. The local SQLite database was automatically backed up before it applied. Existing opportunities retain their state; existing clusters/items are treated as `AUTO` so the next reconcile can clean stale machine-generated membership without changing manual records.
+- **Verification:** `npm test` has 130 passing tests, including lifecycle transition and retry-state coverage. ESLint, TypeScript, Prisma validation, migration status/diff, the fresh-and-legacy SQLite migration rehearsal, and a Next.js production build passed.
+
 ## Deferred by design
 
-- WordPress sync, image, intelligence, and product-feature changes: Phases 5–9.
+- Product-feature changes: Phases 8–9.

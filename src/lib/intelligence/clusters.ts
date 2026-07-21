@@ -1,7 +1,8 @@
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
-import { normalizeSearchText, tokenizeForSearch } from "@/lib/intelligence/text";
+import { findTopicClusterCatalogName } from "@/lib/intelligence/cluster-catalog";
+import { normalizeSearchText } from "@/lib/intelligence/text";
 
 type ClusterItemType = "SITE_POST" | "ARTICLE" | "OPPORTUNITY";
 type ClusterTransaction = Prisma.TransactionClient;
@@ -60,46 +61,8 @@ type NormalizedCatalogItem = TopicClusterDraftItem & {
   clusterName: string | null;
 };
 
-function hasAll(tokens: string[], required: string[]) {
-  return required.every((token) => tokens.includes(token));
-}
-
-function hasAny(tokens: string[], choices: string[]) {
-  return choices.some((token) => tokens.includes(token));
-}
-
 function pickClusterName(value: string) {
-  const tokens = tokenizeForSearch(value);
-
-  if (hasAll(tokens, ["1950s", "cereal"]) && hasAny(tokens, ["ad", "ads", "advertising"])) {
-    return "1950s cereal advertising";
-  }
-
-  if (hasAll(tokens, ["walking", "dead"]) && hasAny(tokens, ["character", "retrospective"])) {
-    return "Walking Dead character retrospectives";
-  }
-
-  if (tokens.includes("slasher")) {
-    return "slasher iconography";
-  }
-
-  if (
-    tokens.includes("retro") &&
-    hasAny(tokens, ["game", "gaming"]) &&
-    hasAny(tokens, ["ad", "ads", "advertising", "commercial"])
-  ) {
-    return "retro game commercial nostalgia";
-  }
-
-  if (tokens.includes("horror") && hasAny(tokens, ["brand", "branding", "nostalgia"])) {
-    return "horror branding and nostalgia";
-  }
-
-  if (tokens.includes("mascot") && hasAny(tokens, ["ad", "ads", "advertising"])) {
-    return "mascot advertising";
-  }
-
-  return null;
+  return findTopicClusterCatalogName(value);
 }
 
 function normalizedClusterName(name: string) {
@@ -218,17 +181,37 @@ export function buildTopicClusterDrafts(input: TopicClusterCatalogInput): TopicC
     .sort((left, right) => right.items.length - left.items.length || left.name.localeCompare(right.name));
 }
 
-async function findMatchingClusterItem(transaction: ClusterTransaction, input: {
-  topicClusterId: string;
-  item: TopicClusterDraftItem;
+function clusterItemTargetKey(item: {
+  itemType: ClusterItemType;
+  sitePostId?: string | null;
+  articleId?: string | null;
+  opportunityId?: string | null;
 }) {
-  return transaction.topicClusterItem.findFirst({
+  const targetId = item.sitePostId ?? item.articleId ?? item.opportunityId;
+
+  if (!targetId) {
+    throw new Error("A topic cluster item must have exactly one target.");
+  }
+
+  return `${item.itemType}:${targetId}`;
+}
+
+async function clearAutomaticOpportunityAssignment(
+  transaction: ClusterTransaction,
+  topicClusterId: string,
+  opportunityId: string | null,
+) {
+  if (!opportunityId) {
+    return;
+  }
+
+  await transaction.contentOpportunity.updateMany({
     where: {
-      topicClusterId: input.topicClusterId,
-      itemType: input.item.itemType,
-      sitePostId: input.item.sitePostId ?? null,
-      articleId: input.item.articleId ?? null,
-      opportunityId: input.item.opportunityId ?? null,
+      id: opportunityId,
+      topicClusterId,
+    },
+    data: {
+      topicClusterId: null,
     },
   });
 }
@@ -236,32 +219,63 @@ async function findMatchingClusterItem(transaction: ClusterTransaction, input: {
 export async function upsertTopicClustersFromCatalog(input: TopicClusterCatalogInput) {
   const drafts = buildTopicClusterDrafts(input);
 
-  for (const draft of drafts) {
-    await prisma.$transaction(async (transaction) => {
-      const cluster = await transaction.topicCluster.upsert({
-        where: { normalizedName: draft.normalizedName },
-        update: {
-          name: draft.name,
-          description: draft.description,
-          categoryId: draft.categoryId,
-        },
-        create: {
-          name: draft.name,
-          normalizedName: draft.normalizedName,
-          description: draft.description,
-          categoryId: draft.categoryId,
-        },
-      });
+  await prisma.$transaction(async (transaction) => {
+    const existingClusters = await transaction.topicCluster.findMany({
+      include: {
+        items: true,
+      },
+    });
+    const existingByNormalizedName = new Map(
+      existingClusters.map((cluster) => [cluster.normalizedName, cluster]),
+    );
+    const desiredAutomaticClusters = new Set(drafts.map((draft) => draft.normalizedName));
+
+    for (const draft of drafts) {
+      const existing = existingByNormalizedName.get(draft.normalizedName);
+
+      // A manually curated cluster owns its title and membership. Automation may
+      // recognize the same topic, but it must never rewrite that editorial work.
+      if (existing?.source === "MANUAL") {
+        continue;
+      }
+
+      const cluster = existing
+        ? await transaction.topicCluster.update({
+            where: { id: existing.id },
+            data: {
+              name: draft.name,
+              description: draft.description,
+              categoryId: draft.categoryId,
+              isArchived: false,
+            },
+          })
+        : await transaction.topicCluster.create({
+            data: {
+              name: draft.name,
+              normalizedName: draft.normalizedName,
+              description: draft.description,
+              categoryId: draft.categoryId,
+              source: "AUTO",
+              isArchived: false,
+            },
+          });
+      const existingItems = existing?.items ?? [];
+      const existingItemsByTarget = new Map(
+        existingItems.map((item) => [clusterItemTargetKey(item), item]),
+      );
+      const desiredTargets = new Set(draft.items.map((item) => clusterItemTargetKey(item)));
 
       for (const item of draft.items) {
-        const existing = await findMatchingClusterItem(transaction, {
-          topicClusterId: cluster.id,
-          item,
-        });
+        const itemKey = clusterItemTargetKey(item);
+        const matchingItem = existingItemsByTarget.get(itemKey);
 
-        if (existing) {
+        if (matchingItem?.source === "MANUAL") {
+          continue;
+        }
+
+        if (matchingItem) {
           await transaction.topicClusterItem.update({
-            where: { id: existing.id },
+            where: { id: matchingItem.id },
             data: {
               label: item.label,
               sortOrder: item.sortOrder,
@@ -277,19 +291,61 @@ export async function upsertTopicClustersFromCatalog(input: TopicClusterCatalogI
               opportunityId: item.opportunityId,
               label: item.label,
               sortOrder: item.sortOrder,
+              source: "AUTO",
             },
           });
         }
 
         if (item.opportunityId) {
-          await transaction.contentOpportunity.update({
-            where: { id: item.opportunityId },
+          await transaction.contentOpportunity.updateMany({
+            where: {
+              id: item.opportunityId,
+              OR: [{ topicClusterId: null }, { topicClusterId: cluster.id }],
+            },
             data: { topicClusterId: cluster.id },
           });
         }
       }
-    });
-  }
+
+      const staleAutomaticItems = existingItems.filter(
+        (item) => item.source === "AUTO" && !desiredTargets.has(clusterItemTargetKey(item)),
+      );
+
+      for (const item of staleAutomaticItems) {
+        await clearAutomaticOpportunityAssignment(transaction, cluster.id, item.opportunityId);
+      }
+
+      if (staleAutomaticItems.length > 0) {
+        await transaction.topicClusterItem.deleteMany({
+          where: { id: { in: staleAutomaticItems.map((item) => item.id) } },
+        });
+      }
+    }
+
+    for (const cluster of existingClusters) {
+      if (cluster.source === "MANUAL" || desiredAutomaticClusters.has(cluster.normalizedName)) {
+        continue;
+      }
+
+      const staleAutomaticItems = cluster.items.filter((item) => item.source === "AUTO");
+
+      for (const item of staleAutomaticItems) {
+        await clearAutomaticOpportunityAssignment(transaction, cluster.id, item.opportunityId);
+      }
+
+      if (staleAutomaticItems.length > 0) {
+        await transaction.topicClusterItem.deleteMany({
+          where: { id: { in: staleAutomaticItems.map((item) => item.id) } },
+        });
+      }
+
+      const hasManualItems = cluster.items.some((item) => item.source === "MANUAL");
+      await transaction.topicCluster.update({
+        where: { id: cluster.id },
+        data: { isArchived: !hasManualItems },
+      });
+    }
+  });
 
   return drafts;
 }

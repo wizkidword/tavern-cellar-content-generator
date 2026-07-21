@@ -56,9 +56,16 @@ enum ImageOperationState {
 enum ContentOpportunityStatus {
   IDEA
   APPROVED
+  GENERATING
   GENERATED
+  GENERATION_FAILED
   REJECTED
   ARCHIVED
+}
+
+enum TopicClusterSource {
+  AUTO
+  MANUAL
 }
 
 enum TopicClusterItemType {
@@ -301,6 +308,9 @@ model ContentOpportunity {
   scoreReasons         String
   duplicateRiskLabel   String
   generatedArticleId   String?
+  generationAttemptKey String?                  @unique
+  generationErrorCode  String?
+  generationLastAttemptAt DateTime?
   topicClusterId       String?
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
@@ -315,6 +325,7 @@ model ContentOpportunity {
   @@unique([categoryId, normalizedKeyword, normalizedAngle])
   @@index([categoryId])
   @@index([status])
+  @@index([generationAttemptKey])
   @@index([overallScore])
 }
 
@@ -363,6 +374,8 @@ model TopicCluster {
   normalizedName String   @unique
   description    String
   categoryId     Int?
+  source         TopicClusterSource @default(AUTO)
+  isArchived     Boolean             @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -371,6 +384,7 @@ model TopicCluster {
   items         TopicClusterItem[]
 
   @@index([categoryId])
+  @@index([source, isArchived])
 }
 
 model TopicClusterItem {
@@ -382,6 +396,7 @@ model TopicClusterItem {
   opportunityId  String?
   label          String
   sortOrder      Int                  @default(0)
+  source         TopicClusterSource   @default(AUTO)
   createdAt      DateTime             @default(now())
 
   topicCluster TopicCluster        @relation(fields: [topicClusterId], references: [id], onDelete: Cascade)
@@ -394,6 +409,7 @@ model TopicClusterItem {
   @@index([sitePostId])
   @@index([articleId])
   @@index([opportunityId])
+  @@index([source])
   @@unique([topicClusterId, sitePostId])
   @@unique([topicClusterId, articleId])
   @@unique([topicClusterId, opportunityId])

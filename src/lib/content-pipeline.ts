@@ -3,6 +3,7 @@ import {
   type ArticleBodyImage,
   ArticleStatus,
   type Category,
+  type Prisma,
 } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
@@ -76,7 +77,7 @@ import {
 } from "@/lib/serialized-values";
 import { articleReviewFormSchema, parseFormData } from "@/lib/validation/schemas";
 
-type GenerateArticleRequest = {
+export type GenerateArticleRequest = {
   categoryId: number;
   primaryKeyword: string;
   angle: string;
@@ -87,6 +88,15 @@ type GenerateArticleRequest = {
   falImageModel?: FalImageModel;
   openAiImageModel?: OpenAIImageModel;
   bodyImageCount?: number;
+};
+
+export type PreparedArticleDraft = {
+  data: Prisma.ArticleUncheckedCreateInput;
+  generateImage: boolean;
+  imageProvider: FeaturedImageProvider;
+  falImageModel: FalImageModel;
+  openAiImageModel: OpenAIImageModel;
+  bodyImageCount: number;
 };
 
 type WordPressPublishMode = "draft" | "publish" | "future";
@@ -799,7 +809,9 @@ async function findDuplicateCandidates(input: {
   }));
 }
 
-export async function createArticle(request: GenerateArticleRequest) {
+export async function prepareArticleDraft(
+  request: GenerateArticleRequest,
+): Promise<PreparedArticleDraft> {
   const category = await getPlanningCategory(request.categoryId);
   const textModel = resolveOpenAITextModel(request.textModel);
   const imageProvider = resolveFeaturedImageProvider(request.imageProvider);
@@ -872,7 +884,7 @@ export async function createArticle(request: GenerateArticleRequest) {
     internalLinks,
   });
 
-  let article = await prisma.article.create({
+  return {
     data: {
       categoryId: category.id,
       title: generated.title,
@@ -903,30 +915,51 @@ export async function createArticle(request: GenerateArticleRequest) {
       qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
       qualityWarnings: serializeStringArray(quality.warnings),
     },
+    generateImage: request.generateImage,
+    imageProvider,
+    falImageModel,
+    openAiImageModel,
+    bodyImageCount: resolveArticleBodyImageCount(request.bodyImageCount),
+  };
+}
+
+export async function createArticleRecordFromPreparedDraft(
+  transaction: Prisma.TransactionClient,
+  prepared: PreparedArticleDraft,
+): Promise<ArticleWithCategoryAndBodyImages> {
+  return transaction.article.create({
+    data: prepared.data,
     include: articleWithBodyImagesInclude(),
   });
+}
 
-  if (request.generateImage) {
+export async function finishPreparedArticleDraft(
+  article: ArticleWithCategoryAndBodyImages,
+  prepared: PreparedArticleDraft,
+) {
+  let completedArticle = article;
+
+  if (prepared.generateImage) {
     try {
-      article = await replaceFeaturedImageForArticle({
-        article,
-        provider: imageProvider,
-        falImageModel,
-        openAiImageModel,
+      completedArticle = await replaceFeaturedImageForArticle({
+        article: completedArticle,
+        provider: prepared.imageProvider,
+        falImageModel: prepared.falImageModel,
+        openAiImageModel: prepared.openAiImageModel,
       });
     } catch {
       // The structured failure state is already persisted for the review screen.
     }
   }
 
-  if (resolveArticleBodyImageCount(request.bodyImageCount) > 0) {
+  if (prepared.bodyImageCount > 0) {
     try {
-      article = await generateBodyImagesForArticle({
-        article,
-        count: request.bodyImageCount,
-        imageProvider,
-        falImageModel,
-        openAiImageModel,
+      completedArticle = await generateBodyImagesForArticle({
+        article: completedArticle,
+        count: prepared.bodyImageCount,
+        imageProvider: prepared.imageProvider,
+        falImageModel: prepared.falImageModel,
+        openAiImageModel: prepared.openAiImageModel,
         replaceExisting: false,
       });
     } catch {
@@ -934,7 +967,17 @@ export async function createArticle(request: GenerateArticleRequest) {
     }
   }
 
-  return article;
+  return completedArticle;
+}
+
+export async function createArticle(request: GenerateArticleRequest) {
+  const prepared = await prepareArticleDraft(request);
+  const article = await prisma.article.create({
+    data: prepared.data,
+    include: articleWithBodyImagesInclude(),
+  });
+
+  return finishPreparedArticleDraft(article, prepared);
 }
 
 export async function generateArticleModelComparison(
