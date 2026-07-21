@@ -55,9 +55,14 @@ export default async function IntelligencePage({ searchParams }: IntelligencePag
                   Refresh Topic Clusters
                 </button>
               </form>
-              <form action={syncWordPressCatalogAction}>
+              <form action={syncWordPressCatalogAction.bind(null, "FULL_PRIVATE")}>
                 <button className="action-secondary" type="submit">
-                  Sync WordPress History
+                  Full private sync
+                </button>
+              </form>
+              <form action={syncWordPressCatalogAction.bind(null, "PUBLIC_ONLY")}>
+                <button className="action-secondary" type="submit">
+                  Public-only sync
                 </button>
               </form>
             </div>
@@ -76,12 +81,17 @@ export default async function IntelligencePage({ searchParams }: IntelligencePag
               <p className="metric-number">{intelligence.linkIndex.postsWithLinks}</p>
             </div>
             <div className="metric-card">
-              <p className="eyebrow mb-2">Latest Sync</p>
+              <p className="eyebrow mb-2">Full Private Sync</p>
               <p className="text-xl font-semibold text-[#fff4e1]">
-                {formatSyncTime(intelligence.linkIndex.latestSyncAt)}
+                {formatSyncTime(intelligence.linkIndex.lastSuccessfulFullSyncAt)}
               </p>
               {intelligence.linkIndex.stale ? (
-                <p className="mt-2 text-sm text-[#ffd2c7]">Sync data is older than 24 hours.</p>
+                <p className="mt-2 text-sm text-[#ffd2c7]">No recent successful full private sync.</p>
+              ) : null}
+              {intelligence.linkIndex.latestSyncRun?.mode === "PUBLIC_ONLY" ? (
+                <p className="mt-2 text-sm text-[#ffd2c7]">
+                  The latest run was public-only; it did not confirm missing private content.
+                </p>
               ) : null}
             </div>
           </div>

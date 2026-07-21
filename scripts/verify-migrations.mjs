@@ -26,13 +26,18 @@ function fixtureEnvironment(filename, backupDirectory) {
 }
 
 function run(command, args, environment) {
-  return execFileSync(command, args, {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    env: environment,
-    stdio: "pipe",
-    windowsHide: true,
-  });
+  try {
+    return execFileSync(command, args, {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: environment,
+      stdio: "pipe",
+      windowsHide: true,
+    });
+  } catch (error) {
+    const output = `${error.stdout ?? ""}${error.stderr ?? ""}`.trim();
+    throw new Error(output || (error instanceof Error ? error.message : "Subprocess failed."));
+  }
 }
 
 function runPrisma(args, environment) {
@@ -47,7 +52,9 @@ function expectPrismaFailure(args, environment, expectedMessage) {
   assert.throws(
     () => runPrisma(args, environment),
     (error) => {
-      const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+      const output = `${error.stdout ?? ""}${error.stderr ?? ""}${
+        error instanceof Error ? error.message : ""
+      }`;
       return expectedMessage.test(output);
     },
   );
@@ -81,6 +88,11 @@ function verifyFreshInstall() {
     run(
       process.execPath,
       ["--import", "tsx", "--test", "tests/publishing/publish-attempts.integration.ts"],
+      environment,
+    );
+    run(
+      process.execPath,
+      ["--import", "tsx", "--test", "tests/sync/wordpress-sync.integration.ts"],
       environment,
     );
 

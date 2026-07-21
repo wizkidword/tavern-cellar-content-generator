@@ -2,6 +2,7 @@ import { ArticleStatus } from "@prisma/client";
 
 import { isActiveAppCategory, sortCategoriesForApp } from "@/lib/category-config";
 import { prisma } from "@/lib/db";
+import { getServerEnv } from "@/lib/env";
 import { buildTopicClusterDrafts } from "@/lib/intelligence/clusters";
 import { buildCoverageMap } from "@/lib/intelligence/coverage";
 import { parseStringArray } from "@/lib/serialized-values";
@@ -11,7 +12,7 @@ export function parseScoreReasons(value: string) {
 }
 
 export async function getIntelligenceData() {
-  const [allCategories, articles, sitePosts, opportunities] = await Promise.all([
+  const [allCategories, articles, sitePosts, opportunities, latestSyncRun, lastSuccessfulFullSync] = await Promise.all([
     prisma.category.findMany({
       orderBy: [{ postCount: "desc" }, { name: "asc" }],
     }),
@@ -49,6 +50,16 @@ export async function getIntelligenceData() {
       orderBy: { updatedAt: "desc" },
       take: 300,
     }),
+    prisma.wordPressSyncRun.findFirst({
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: {
+        mode: "FULL_PRIVATE",
+        state: "SUCCEEDED",
+      },
+      orderBy: { completedAt: "desc" },
+    }),
   ]);
   const categories = sortCategoriesForApp(
     allCategories.filter(isActiveAppCategory),
@@ -73,7 +84,12 @@ export async function getIntelligenceData() {
       totalPosts: sitePosts.length,
       postsWithLinks: sitePosts.filter((post) => Boolean(post.link)).length,
       latestSyncAt,
-      stale: !latestSyncAt || Date.now() - latestSyncAt.getTime() > 24 * 60 * 60 * 1000,
+      latestSyncRun,
+      lastSuccessfulFullSyncAt: lastSuccessfulFullSync?.completedAt ?? null,
+      stale:
+        !lastSuccessfulFullSync?.completedAt ||
+        Date.now() - lastSuccessfulFullSync.completedAt.getTime() >
+          getServerEnv().WORDPRESS_SYNC_STALE_HOURS * 60 * 60 * 1000,
     },
     topicClusters: buildTopicClusterDrafts({
       sitePosts: sitePosts.map((post) => ({
@@ -96,7 +112,7 @@ export async function getIntelligenceData() {
 }
 
 export async function getOpportunityListData() {
-  const [allCategories, opportunities] = await Promise.all([
+  const [allCategories, opportunities, latestSyncRun, lastSuccessfulFullSync] = await Promise.all([
     prisma.category.findMany({
       orderBy: [{ postCount: "desc" }, { name: "asc" }],
     }),
@@ -108,6 +124,16 @@ export async function getOpportunityListData() {
       },
       orderBy: [{ status: "asc" }, { overallScore: "desc" }, { updatedAt: "desc" }],
     }),
+    prisma.wordPressSyncRun.findFirst({
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: {
+        mode: "FULL_PRIVATE",
+        state: "SUCCEEDED",
+      },
+      orderBy: { completedAt: "desc" },
+    }),
   ]);
 
   return {
@@ -115,6 +141,10 @@ export async function getOpportunityListData() {
       allCategories.filter(isActiveAppCategory),
     ),
     opportunities,
+    syncHealth: {
+      latestRun: latestSyncRun,
+      lastSuccessfulFullSync,
+    },
   };
 }
 

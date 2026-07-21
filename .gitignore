@@ -50,6 +50,7 @@ next-env.d.ts
 /prisma/prisma/*.db-*
 /prisma/backups/
 /prisma/shadow-*.db
+/prisma/phase*-shadow.db
 /.playwright-mcp/
 /.playwright-cli/
 /output/playwright/

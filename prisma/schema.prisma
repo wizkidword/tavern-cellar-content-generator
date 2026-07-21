@@ -33,6 +33,18 @@ enum PublishAttemptState {
   UNCERTAIN
 }
 
+enum WordPressSyncMode {
+  FULL_PRIVATE
+  PUBLIC_ONLY
+}
+
+enum WordPressSyncState {
+  RUNNING
+  SUCCEEDED
+  DEGRADED
+  FAILED
+}
+
 enum ContentOpportunityStatus {
   IDEA
   APPROVED
@@ -55,6 +67,9 @@ model Category {
   description          String?
   isActive             Boolean              @default(false)
   postCount            Int                  @default(0)
+  lastSeenSyncRunId    String?
+  lastSeenAt           DateTime?
+  isStale              Boolean              @default(false)
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
   articles             Article[]
@@ -77,6 +92,9 @@ model SitePost {
   primaryCategoryId Int?
   rawCategoryIds    String
   lastSyncedAt      DateTime  @default(now())
+  lastSeenSyncRunId String?
+  lastSeenAt        DateTime?
+  isStale           Boolean   @default(false)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -88,6 +106,7 @@ model SitePost {
   @@index([primaryCategoryId])
   @@index([canonicalTopicKey])
   @@index([normalizedTitle])
+  @@index([isStale])
 }
 
 model Article {
@@ -122,6 +141,7 @@ model Article {
   wpStatus                               String?
   scheduledFor                           DateTime?
   scheduledForLocal                      String?
+  scheduledForTimezone                   String?
   publishedAt                            DateTime?
   qualityWordCount                       Int           @default(0)
   qualityHeadingCount                    Int           @default(0)
@@ -170,6 +190,24 @@ model PublishAttempt {
 
   @@index([articleId, updatedAt])
   @@index([state])
+}
+
+model WordPressSyncRun {
+  id                 String             @id @default(cuid())
+  mode               WordPressSyncMode
+  state              WordPressSyncState @default(RUNNING)
+  startedAt          DateTime           @default(now())
+  completedAt        DateTime?
+  postCount          Int                @default(0)
+  categoryCount      Int                @default(0)
+  pageCount          Int                @default(0)
+  errorCode          String?
+  errorCorrelationId String?
+  siteTimezone       String?
+  siteUrl            String
+
+  @@index([state, startedAt])
+  @@index([mode, completedAt])
 }
 
 model ArticleBodyImage {

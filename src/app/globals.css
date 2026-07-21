@@ -342,9 +342,21 @@ button:disabled {
 .status-crowded,
 .status-overloaded,
 .status-adjacent,
-.status-healthy {
+.status-healthy,
+.status-degraded,
+.status-running {
   background: rgba(213, 139, 51, 0.16);
   color: #f2c588;
+}
+
+.status-succeeded {
+  background: rgba(74, 166, 125, 0.16);
+  color: #9ee1be;
+}
+
+.status-failed {
+  background: rgba(209, 119, 98, 0.16);
+  color: #ffd2c7;
 }
 
 .message {

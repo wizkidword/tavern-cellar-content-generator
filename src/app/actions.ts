@@ -58,17 +58,24 @@ function getErrorMessage(error: unknown) {
   return reportAppError(error, "server_action");
 }
 
-export async function syncWordPressCatalogAction() {
+export async function syncWordPressCatalogAction(mode: "FULL_PRIVATE" | "PUBLIC_ONLY" = "FULL_PRIVATE") {
   let targetPath = "/";
 
   try {
     await assertOperatorActionAccess();
-    const result = await syncWordPressCatalog();
+    const result = await syncWordPressCatalog({ mode });
     revalidatePath("/");
+    revalidatePath("/intelligence");
+    revalidatePath("/opportunities");
     targetPath = buildRedirect("/", {
-      message: `Synced ${result.categoryCount} categories and ${result.postCount} live posts from WordPress.`,
+      message:
+        mode === "FULL_PRIVATE"
+          ? `Completed a full private sync: ${result.categoryCount} categories and ${result.postCount} posts.`
+          : `Completed a public-only sync: ${result.categoryCount} categories and ${result.postCount} visible posts. Private coverage may be missing.`,
     });
   } catch (error) {
+    revalidatePath("/");
+    revalidatePath("/intelligence");
     targetPath = buildRedirect("/", {
       error: getErrorMessage(error),
     });

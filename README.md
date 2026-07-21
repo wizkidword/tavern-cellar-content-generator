@@ -32,6 +32,7 @@ OPENAI_IMAGE_MODEL="gpt-image-2"
 WORDPRESS_URL="https://taverncellar.com"
 WORDPRESS_USERNAME="your-wordpress-username"
 WORDPRESS_APP_PASSWORD="your-wordpress-application-password"
+WORDPRESS_SYNC_STALE_HOURS="24"
 FOUNDRY_OPERATOR_TOKEN="replace-with-a-strong-operator-credential"
 SESSION_SECRET="replace-with-at-least-32-random-bytes"
 SESSION_MAX_AGE_HOURS="12"
@@ -79,14 +80,15 @@ See [docs/implementation-status.md](docs/implementation-status.md) for the activ
 
 ## Workflow
 
-1. Click `Sync Live WordPress History` to pull categories and current post history.
-2. Generate a new article draft from the dashboard.
-3. Review and edit the article on its detail page.
-4. Optionally generate the other text model for a side-by-side comparison.
-5. Optionally regenerate the featured image.
-6. Install or update the companion plugin to version 0.2.0 before the first publish, then push a WordPress draft, publish immediately, or schedule it. Foundry creates a private draft placeholder first and can reconcile that same post after an interrupted write.
+1. Run a **Full private sync** to pull all categories plus public, draft, scheduled, pending, and private post history. The dashboard records its health, WordPress timezone, and any stale local records.
+2. Use **Public-only sync** only as a clearly marked visibility check when private access is unavailable; it never marks local history missing or stale and does not replace a full sync.
+3. Generate a new article draft from the dashboard.
+4. Review and edit the article on its detail page.
+5. Optionally generate the other text model for a side-by-side comparison.
+6. Optionally regenerate the featured image.
+7. Install or update the companion plugin to version 0.2.0 before the first publish, then push a WordPress draft, publish immediately, or schedule it. Foundry creates a private draft placeholder first and can reconcile that same post after an interrupted write.
 
-Scheduling stores the local wall-clock time you choose and sends that local time to WordPress, so verify the scheduled post in WordPress after scheduling if your server and WordPress timezone settings ever diverge.
+Scheduling stores the intended UTC instant, converts it to the last confirmed WordPress site timezone, and shows workstation time, WordPress target time, and UTC on the article page. If the site timezone is unknown, run a full private sync before scheduling.
 
 ## Notes
 

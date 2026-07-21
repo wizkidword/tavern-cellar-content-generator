@@ -64,6 +64,7 @@ import {
   formatDateTimeLocal,
   pickRandomWordPressScheduleSlot,
 } from "@/lib/random-schedule";
+import { formatDateTimeInWordPressTimeZone } from "@/lib/wordpress-timezone";
 import {
   parseWordPressCategoryIds,
   serializeStringArray,
@@ -378,13 +379,25 @@ async function generateBodyImagesForArticle(input: {
 }
 
 async function ensureLiveHistory() {
-  const [categoryCount, sitePostCount] = await Promise.all([
+  const [categoryCount, sitePostCount, lastSuccessfulFullSync] = await Promise.all([
     prisma.category.count(),
     prisma.sitePost.count(),
+    prisma.wordPressSyncRun.findFirst({
+      where: {
+        mode: "FULL_PRIVATE",
+        state: "SUCCEEDED",
+      },
+      orderBy: { completedAt: "desc" },
+      select: { completedAt: true },
+    }),
   ]);
+  const staleAfterMs = getServerEnv().WORDPRESS_SYNC_STALE_HOURS * 60 * 60 * 1000;
+  const hasFreshFullSync =
+    lastSuccessfulFullSync?.completedAt &&
+    Date.now() - lastSuccessfulFullSync.completedAt.getTime() < staleAfterMs;
 
-  if (categoryCount === 0 || sitePostCount === 0) {
-    await syncWordPressCatalog();
+  if (categoryCount === 0 || sitePostCount === 0 || !hasFreshFullSync) {
+    await syncWordPressCatalog({ mode: "FULL_PRIVATE" });
   }
 }
 
@@ -975,6 +988,20 @@ function readOptionalSchedule(value: string) {
   };
 }
 
+async function getLatestWordPressSiteTimezone() {
+  const syncRun = await prisma.wordPressSyncRun.findFirst({
+    where: {
+      mode: "FULL_PRIVATE",
+      state: "SUCCEEDED",
+      siteTimezone: { not: null },
+    },
+    orderBy: { completedAt: "desc" },
+    select: { siteTimezone: true },
+  });
+
+  return syncRun?.siteTimezone ?? null;
+}
+
 function ensureFutureSchedule<T extends {
   scheduledFor: Date | null;
   scheduledForLocal: string | null;
@@ -1001,6 +1028,10 @@ export async function saveArticleReview(articleId: string, formData: FormData) {
   const featuredImageAlt = input.featuredImageAlt;
   const contentMarkdown = input.contentMarkdown;
   const schedule = readOptionalSchedule(input.scheduledFor);
+  const wordPressTimezone = schedule.date ? await getLatestWordPressSiteTimezone() : null;
+  const wordPressScheduleTarget = schedule.date
+    ? formatDateTimeInWordPressTimeZone(schedule.date, wordPressTimezone) ?? schedule.localValue
+    : null;
   const quality = analyzeArticleQuality({
     title,
     primaryKeyword,
@@ -1040,7 +1071,8 @@ export async function saveArticleReview(articleId: string, formData: FormData) {
       featuredImageAlt,
       contentMarkdown,
       scheduledFor: schedule.date,
-      scheduledForLocal: schedule.localValue,
+      scheduledForLocal: wordPressScheduleTarget,
+      scheduledForTimezone: schedule.date ? wordPressTimezone : null,
       status: ArticleStatus.READY_FOR_REVIEW,
       qualityWordCount: quality.wordCount,
       qualityHeadingCount: quality.headingCount,
@@ -1319,7 +1351,19 @@ export async function getArticleComparisonData(articleId: string) {
 }
 
 export async function getDashboardData() {
-  const [allCategories, articles, sitePostCount, articleCount] = await Promise.all([
+  const [
+    allCategories,
+    articles,
+    sitePostCount,
+    articleCount,
+    latestSyncRun,
+    lastPrivateSync,
+    lastSuccessfulFullSync,
+    lastPublicOnlySync,
+    lastFailedSync,
+    stalePostCount,
+    staleCategoryCount,
+  ] = await Promise.all([
     prisma.category.findMany({
       include: {
         _count: {
@@ -1339,6 +1383,30 @@ export async function getDashboardData() {
     }),
     prisma.sitePost.count(),
     prisma.article.count(),
+    prisma.wordPressSyncRun.findFirst({
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: { mode: "FULL_PRIVATE" },
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: {
+        mode: "FULL_PRIVATE",
+        state: "SUCCEEDED",
+      },
+      orderBy: { completedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: { mode: "PUBLIC_ONLY" },
+      orderBy: { completedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: { state: "FAILED" },
+      orderBy: { completedAt: "desc" },
+    }),
+    prisma.sitePost.count({ where: { isStale: true } }),
+    prisma.category.count({ where: { isStale: true } }),
   ]);
 
   const categories = sortCategoriesForApp(
@@ -1350,5 +1418,14 @@ export async function getDashboardData() {
     articles,
     sitePostCount,
     articleCount,
+    syncHealth: {
+      latestRun: latestSyncRun,
+      lastPrivateSync,
+      lastSuccessfulFullSync,
+      lastPublicOnlySync,
+      lastFailedSync,
+      stalePostCount,
+      staleCategoryCount,
+    },
   };
 }

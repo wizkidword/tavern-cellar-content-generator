@@ -239,20 +239,32 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
 
                 <div>
                   <label className="label" htmlFor="scheduledFor">
-                    Schedule For
+                    Schedule for (this workstation)
                   </label>
                   <input
                     className="field"
                     id="scheduledFor"
                     name="scheduledFor"
                     type="datetime-local"
-                    defaultValue={article.scheduledForLocal ?? formatDateInput(article.scheduledFor)}
+                    defaultValue={formatDateInput(article.scheduledFor)}
                   />
-                  {article.scheduledForLocal ? (
-                    <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
-                      WordPress local schedule target: {article.scheduledForLocal.replace("T", " ")}
+                  <div className="mt-2 space-y-1 text-xs leading-5 text-[var(--muted)]">
+                    <p>
+                      WordPress site timezone: {article.scheduledForTimezone ?? dashboard.syncHealth.lastSuccessfulFullSync?.siteTimezone ?? "not confirmed by a full private sync"}.
                     </p>
-                  ) : null}
+                    {article.scheduledFor ? (
+                      <>
+                        <p>Workstation time: {format(article.scheduledFor, "PPpp")}.</p>
+                        <p>
+                          WordPress site target: {article.scheduledForLocal?.replace("T", " ") ?? "not set"}
+                          {article.scheduledForTimezone ? ` (${article.scheduledForTimezone})` : ""}.
+                        </p>
+                        <p>UTC instant: {article.scheduledFor.toISOString()}.</p>
+                      </>
+                    ) : (
+                      <p>After saving, Foundry will show the WordPress-site target and the matching UTC instant.</p>
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid gap-3">

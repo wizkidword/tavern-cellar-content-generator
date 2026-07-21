@@ -3,6 +3,8 @@ import {
   type ArticleBodyImage,
   type Category,
   type Prisma,
+  WordPressSyncMode,
+  WordPressSyncState,
 } from "@prisma/client";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -40,6 +42,22 @@ type WordPressPostRecord = {
   title: { rendered: string };
   excerpt: { rendered: string };
 };
+
+export type WordPressSyncModeInput = "FULL_PRIVATE" | "PUBLIC_ONLY";
+
+type WordPressSiteSettings = {
+  timezone_string?: string;
+  gmt_offset?: number;
+};
+
+function formatWordPressGmtOffset(offset: number) {
+  const sign = offset >= 0 ? "+" : "-";
+  const absoluteMinutes = Math.round(Math.abs(offset) * 60);
+  const hours = Math.floor(absoluteMinutes / 60);
+  const minutes = absoluteMinutes % 60;
+
+  return `UTC${sign}${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
 
 type WordPressPostEditRecord = {
   id: number;
@@ -260,20 +278,106 @@ async function fetchWordPressWrite(url: string, init: RequestInit) {
   );
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit) {
-  const response = await fetchWordPressRead(url, init);
+function readWordPressTotalPages(response: Response) {
+  const totalPages = Number(response.headers.get("X-WP-TotalPages") ?? "1");
 
-  if (!response.ok) {
-    throw await buildWordPressError(response);
+  if (!Number.isInteger(totalPages) || totalPages < 1 || totalPages > 10_000) {
+    throw new AppError("WP_RESPONSE_INVALID");
   }
 
-  return response.json() as Promise<T>;
+  return totalPages;
 }
 
-export async function fetchWordPressCategories() {
-  return fetchJson<WordPressCategoryRecord[]>(
-    wordpressApiUrl("/categories?per_page=100&_fields=id,count,description,name,slug"),
-  );
+function assertWordPressCategoryRecords(value: unknown): asserts value is WordPressCategoryRecord[] {
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (category) =>
+        !category ||
+        typeof category !== "object" ||
+        !Number.isInteger((category as WordPressCategoryRecord).id) ||
+        (category as WordPressCategoryRecord).id < 1 ||
+        !Number.isInteger((category as WordPressCategoryRecord).count) ||
+        (category as WordPressCategoryRecord).count < 0 ||
+        typeof (category as WordPressCategoryRecord).description !== "string" ||
+        typeof (category as WordPressCategoryRecord).name !== "string" ||
+        typeof (category as WordPressCategoryRecord).slug !== "string",
+    )
+  ) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+}
+
+function assertWordPressPostRecords(value: unknown): asserts value is WordPressPostRecord[] {
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (post) =>
+        !post ||
+        typeof post !== "object" ||
+        !Number.isInteger((post as WordPressPostRecord).id) ||
+        (post as WordPressPostRecord).id < 1 ||
+        typeof (post as WordPressPostRecord).date !== "string" ||
+        typeof (post as WordPressPostRecord).slug !== "string" ||
+        typeof (post as WordPressPostRecord).link !== "string" ||
+        !Array.isArray((post as WordPressPostRecord).categories) ||
+        (post as WordPressPostRecord).categories.some((categoryId) => !Number.isInteger(categoryId)) ||
+        typeof (post as WordPressPostRecord).title?.rendered !== "string" ||
+        typeof (post as WordPressPostRecord).excerpt?.rendered !== "string",
+    )
+  ) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+}
+
+async function fetchAllWordPressCategories(input: {
+  headers?: HeadersInit;
+}) {
+  const categories: WordPressCategoryRecord[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages) {
+    const response = await fetchWordPressRead(
+      wordpressApiUrl(`/categories?per_page=100&page=${page}&_fields=id,count,description,name,slug`),
+      { headers: input.headers },
+    );
+
+    if (!response.ok) {
+      throw await buildWordPressError(response);
+    }
+
+    const reportedTotalPages = readWordPressTotalPages(response);
+
+    if (page === 1) {
+      totalPages = reportedTotalPages;
+    } else if (reportedTotalPages !== totalPages) {
+      throw new AppError("WP_RESPONSE_INVALID");
+    }
+
+    const batch: unknown = await response.json();
+    assertWordPressCategoryRecords(batch);
+    categories.push(...batch);
+    page += 1;
+  }
+
+  return { categories, pageCount: totalPages };
+}
+
+function assertUniqueWordPressIds(records: Array<{ id: number }>) {
+  if (new Set(records.map((record) => record.id)).size !== records.length) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+}
+
+function inBatches<T>(items: T[], batchSize: number) {
+  const batches: T[][] = [];
+
+  for (let index = 0; index < items.length; index += batchSize) {
+    batches.push(items.slice(index, index + batchSize));
+  }
+
+  return batches;
 }
 
 function buildWordPressCategoryPayload(input: {
@@ -324,7 +428,7 @@ function createOptionalAuthHeaders() {
 async function fetchPostsPage(input: {
   page: number;
   includePrivateStatuses: boolean;
-  authHeaders: ReturnType<typeof createOptionalAuthHeaders>;
+  authHeaders: HeadersInit | null;
 }) {
   const statusParam = input.includePrivateStatuses
     ? "&status=publish,future,draft,pending,private"
@@ -368,40 +472,42 @@ export function parseWordPressScheduledDate(input: {
   return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
 }
 
-export async function fetchAllWordPressPosts() {
+export async function fetchAllWordPressPosts(input: {
+  mode: WordPressSyncModeInput;
+  headers?: HeadersInit;
+}) {
   const allPosts: WordPressPostRecord[] = [];
   let page = 1;
   let totalPages = 1;
-  const authHeaders = createOptionalAuthHeaders();
-  let includePrivateStatuses = Boolean(authHeaders);
 
   while (page <= totalPages) {
-    let response = await fetchPostsPage({
+    const response = await fetchPostsPage({
       page,
-      includePrivateStatuses,
-      authHeaders,
+      includePrivateStatuses: input.mode === "FULL_PRIVATE",
+      authHeaders: input.headers ?? null,
     });
 
-    if (!response.ok && includePrivateStatuses) {
-      includePrivateStatuses = false;
-      response = await fetchPostsPage({
-        page,
-        includePrivateStatuses,
-        authHeaders: null,
-      });
-    }
-
     if (!response.ok) {
-      throw new Error(`WordPress posts sync failed on page ${page}.`);
+      throw await buildWordPressError(response);
     }
 
-    totalPages = Number(response.headers.get("X-WP-TotalPages") ?? "1");
-    const batch = (await response.json()) as WordPressPostRecord[];
+    const reportedTotalPages = readWordPressTotalPages(response);
+
+    if (page === 1) {
+      totalPages = reportedTotalPages;
+    } else if (reportedTotalPages !== totalPages) {
+      throw new AppError("WP_RESPONSE_INVALID");
+    }
+
+    const batch: unknown = await response.json();
+    assertWordPressPostRecords(batch);
     allPosts.push(...batch);
     page += 1;
   }
 
-  return allPosts;
+  assertUniqueWordPressIds(allPosts);
+
+  return { posts: allPosts, pageCount: totalPages };
 }
 
 export async function fetchScheduledWordPressPostTimes(
@@ -458,68 +564,172 @@ export async function fetchScheduledWordPressPostTimes(
   return scheduledTimes;
 }
 
-export async function syncWordPressCatalog() {
-  const categories = await fetchWordPressCategories();
-  const syncedAt = new Date();
+async function fetchWordPressSiteTimezone(headers: HeadersInit) {
+  try {
+    const response = await fetchWordPressRead(wordpressApiUrl("/settings"), { headers });
 
-  for (const category of categories) {
-    await upsertWordPressCategoryRecord(category);
+    if (!response.ok) {
+      return null;
+    }
+
+    const settings = (await response.json()) as WordPressSiteSettings;
+
+    if (typeof settings.timezone_string === "string" && settings.timezone_string.trim()) {
+      return settings.timezone_string.trim();
+    }
+
+    return typeof settings.gmt_offset === "number"
+      ? formatWordPressGmtOffset(settings.gmt_offset)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function syncWordPressCatalog(input: {
+  mode: WordPressSyncModeInput;
+}) {
+  if (input.mode !== "FULL_PRIVATE" && input.mode !== "PUBLIC_ONLY") {
+    throw new AppError("VALIDATION_FAILED");
   }
 
-  const storedCategories = await prisma.category.findMany();
-  const categoryMap = new Map(storedCategories.map((category) => [category.wpCategoryId, category]));
-  const posts = await fetchAllWordPressPosts();
+  const mode = input.mode;
+  const syncRun = await prisma.wordPressSyncRun.create({
+    data: {
+      mode: mode === "FULL_PRIVATE" ? WordPressSyncMode.FULL_PRIVATE : WordPressSyncMode.PUBLIC_ONLY,
+      siteUrl: getServerEnv().WORDPRESS_URL,
+    },
+  });
 
-  for (const post of posts) {
-    const primaryCategory = categoryMap.get(post.categories[0]);
-    const title = stripHtml(post.title.rendered);
+  try {
+    const authHeaders = mode === "FULL_PRIVATE" ? createAuthHeaders() : null;
+    const categoryResult = await fetchAllWordPressCategories({
+      headers: authHeaders ?? undefined,
+    });
+    const postResult = await fetchAllWordPressPosts({
+      mode,
+      headers: authHeaders ?? undefined,
+    });
+    assertUniqueWordPressIds(categoryResult.categories);
+    const siteTimezone = authHeaders ? await fetchWordPressSiteTimezone(authHeaders) : null;
+    const syncedAt = new Date();
 
-    await prisma.sitePost.upsert({
-      where: { wpPostId: post.id },
-      create: {
-        wpPostId: post.id,
-        title,
-        normalizedTitle: normalizeTopicValue(title),
-        slug: post.slug || slugify(title),
-        excerpt: stripHtml(post.excerpt.rendered) || null,
-        canonicalTopicKey: buildCanonicalTopicKey(
-          primaryCategory?.slug ?? "tavern-cellar",
-          title,
-          title,
-          title,
+    for (const categoryBatch of inBatches(categoryResult.categories, 50)) {
+      await prisma.$transaction(
+        categoryBatch.map((category) =>
+          upsertWordPressCategoryRecord(category, {
+            lastSeenAt: syncedAt,
+            lastSeenSyncRunId: syncRun.id,
+          }),
         ),
-        wpStatus: post.status ?? "publish",
-        publishedAt: post.date ? new Date(post.date) : null,
-        link: post.link,
-        primaryCategoryId: primaryCategory?.id ?? null,
-        rawCategoryIds: serializeWordPressCategoryIds(post.categories),
-        lastSyncedAt: syncedAt,
-      },
-      update: {
-        title,
-        normalizedTitle: normalizeTopicValue(title),
-        slug: post.slug || slugify(title),
-        excerpt: stripHtml(post.excerpt.rendered) || null,
-        canonicalTopicKey: buildCanonicalTopicKey(
-          primaryCategory?.slug ?? "tavern-cellar",
-          title,
-          title,
-          title,
-        ),
-        wpStatus: post.status ?? "publish",
-        publishedAt: post.date ? new Date(post.date) : null,
-        link: post.link,
-        primaryCategoryId: primaryCategory?.id ?? null,
-        rawCategoryIds: serializeWordPressCategoryIds(post.categories),
-        lastSyncedAt: syncedAt,
+      );
+    }
+
+    const storedCategories = await prisma.category.findMany();
+    const categoryMap = new Map(storedCategories.map((category) => [category.wpCategoryId, category]));
+
+    for (const postBatch of inBatches(postResult.posts, 50)) {
+      await prisma.$transaction(
+        postBatch.map((post) => {
+          const primaryCategory = categoryMap.get(post.categories[0]);
+          const title = stripHtml(post.title.rendered);
+          const data = {
+            title,
+            normalizedTitle: normalizeTopicValue(title),
+            slug: post.slug || slugify(title),
+            excerpt: stripHtml(post.excerpt.rendered) || null,
+            canonicalTopicKey: buildCanonicalTopicKey(
+              primaryCategory?.slug ?? "tavern-cellar",
+              title,
+              title,
+              title,
+            ),
+            wpStatus: post.status ?? "publish",
+            publishedAt: post.date ? new Date(post.date) : null,
+            link: post.link,
+            primaryCategoryId: primaryCategory?.id ?? null,
+            rawCategoryIds: serializeWordPressCategoryIds(post.categories),
+            lastSyncedAt: syncedAt,
+            lastSeenSyncRunId: syncRun.id,
+            lastSeenAt: syncedAt,
+            isStale: false,
+          };
+
+          return prisma.sitePost.upsert({
+            where: { wpPostId: post.id },
+            create: {
+              wpPostId: post.id,
+              ...data,
+            },
+            update: data,
+          });
+        }),
+      );
+    }
+
+    let stalePostCount = 0;
+    let staleCategoryCount = 0;
+
+    if (mode === "FULL_PRIVATE") {
+      const [stalePosts, staleCategories] = await Promise.all([
+        prisma.sitePost.updateMany({
+          where: {
+            OR: [
+              { lastSeenSyncRunId: null },
+              { lastSeenSyncRunId: { not: syncRun.id } },
+            ],
+          },
+          data: { isStale: true },
+        }),
+        prisma.category.updateMany({
+          where: {
+            OR: [
+              { lastSeenSyncRunId: null },
+              { lastSeenSyncRunId: { not: syncRun.id } },
+            ],
+          },
+          data: { isStale: true },
+        }),
+      ]);
+      stalePostCount = stalePosts.count;
+      staleCategoryCount = staleCategories.count;
+    }
+
+    const state = mode === "FULL_PRIVATE" ? WordPressSyncState.SUCCEEDED : WordPressSyncState.DEGRADED;
+    await prisma.wordPressSyncRun.update({
+      where: { id: syncRun.id },
+      data: {
+        state,
+        completedAt: new Date(),
+        categoryCount: categoryResult.categories.length,
+        postCount: postResult.posts.length,
+        pageCount: categoryResult.pageCount + postResult.pageCount,
+        siteTimezone,
       },
     });
-  }
 
-  return {
-    categoryCount: categories.length,
-    postCount: posts.length,
-  };
+    return {
+      categoryCount: categoryResult.categories.length,
+      mode,
+      postCount: postResult.posts.length,
+      siteTimezone,
+      staleCategoryCount,
+      stalePostCount,
+      state,
+    };
+  } catch (error) {
+    const appError = toAppError(error);
+    await prisma.wordPressSyncRun.update({
+      where: { id: syncRun.id },
+      data: {
+        state: WordPressSyncState.FAILED,
+        completedAt: new Date(),
+        errorCode: appError.code,
+        errorCorrelationId: appError.correlationId,
+      },
+    });
+    throw appError;
+  }
 }
 
 function createAuthHeaders(contentType = "application/json") {
@@ -579,9 +789,13 @@ async function createWordPressDraftPlaceholder(article: Article, operationKey: s
   return payload;
 }
 
-async function upsertWordPressCategoryRecord(
+function upsertWordPressCategoryRecord(
   category: WordPressCategoryRecord,
-  options: { isActive?: boolean } = {},
+  options: {
+    isActive?: boolean;
+    lastSeenAt?: Date;
+    lastSeenSyncRunId?: string;
+  } = {},
 ) {
   const isActive = options.isActive ?? isAllowedAppCategorySlug(category.slug);
 
@@ -594,6 +808,13 @@ async function upsertWordPressCategoryRecord(
       description: category.description || null,
       postCount: category.count,
       isActive,
+      ...(options.lastSeenAt
+        ? {
+            isStale: false,
+            lastSeenAt: options.lastSeenAt,
+            lastSeenSyncRunId: options.lastSeenSyncRunId,
+          }
+        : {}),
     },
     update: {
       name: category.name,
@@ -601,6 +822,13 @@ async function upsertWordPressCategoryRecord(
       description: category.description || null,
       postCount: category.count,
       ...(options.isActive === undefined ? {} : { isActive }),
+      ...(options.lastSeenAt
+        ? {
+            isStale: false,
+            lastSeenAt: options.lastSeenAt,
+            lastSeenSyncRunId: options.lastSeenSyncRunId,
+          }
+        : {}),
     },
   });
 }

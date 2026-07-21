@@ -57,6 +57,18 @@ Status: complete on 2026-07-21.
 - **Known bounded risk:** Post creation is reconciled by a private operation key. A lost response during an individual media upload can still leave an unattached duplicate media asset because WordPress has no media-operation-key endpoint yet; the local post ID and already-persisted media IDs still prevent a duplicate post.
 - **Verification:** WordPress contract tests cover placeholder creation, reconciliation before retry, and refusal to create after an unreconciled uncertain write. A temporary SQLite test covers concurrent claim rejection, durable post-ID checkpointing, uncertain state, and operation-key reuse. `npm run test:db` also verifies fresh and legacy migration paths. PHP was not available on this workstation, so the plugin syntax check is deferred to CI or the WordPress host.
 
+## Phase 5 — complete and honest WordPress synchronization
+
+Status: complete on 2026-07-21.
+
+- **SYNC-01 / SYNC-04:** Added `WordPressSyncRun` with explicit mode, state, timestamps, counts, error/reference, timezone, and site URL. Posts and categories now record their last successful observation and whether a successful full-private run considers them stale. Full syncs mark records not seen in that run as stale; public-only syncs never do.
+- **SYNC-02:** The old authenticated-to-public fallback has been removed. Full private sync either completes as full coverage or records a failed run with a safe error code/reference. Public-only sync is a separate, deliberately labeled dashboard action and starts a new request sequence at page one.
+- **SYNC-03:** Posts and categories are fully paginated with a checked `X-WP-TotalPages` value, strict payload validation, stable bounded GET timeout/retry policy, duplicate remote-ID rejection, and 50-record SQLite write batches. Pagination cannot silently change scope.
+- **SYNC-05 / SYNC-06:** Full private freshness is tracked independently from the existence of local rows. `WORDPRESS_SYNC_STALE_HOURS` defaults to 24 (allowed range 1–168). The dashboard now shows last full/private and public-only runs, current mode, credential state, counts, stale records, WordPress timezone, and the latest safe failure reference. Intelligence and opportunity screens visibly warn when full private coverage is absent or the latest run is public-only.
+- **SYNC-07:** A full private sync captures the WordPress timezone from authenticated settings. Scheduling keeps the unambiguous UTC instant, derives the WordPress-local timestamp to send, stores the timezone used, and displays workstation time, WordPress target time, and UTC in the review screen.
+- **Schema and migration notes:** Added `20260721191042_wordpress_sync_health` and `20260721191811_schedule_timezone_context`. The local SQLite database was backed up before the schedule-context migration; existing articles keep their existing schedule values and gain an optional timezone field.
+- **Verification:** Unit tests cover private pagination, first- and later-page auth failures without fallback, a public-only page-one restart, existing GET retry behavior, and timezone conversion. The SQLite rehearsal covers fully paginated posts and categories, full/private stale marking, public-only non-staling, stored timezone, and a failed run with a correlation reference. `npm test` now has 127 passing tests; `npm run test:db`, TypeScript, ESLint, Prisma validation/generation, migration status/diff, and a production build are run for the final phase check.
+
 ## Deferred by design
 
 - WordPress sync, image, intelligence, and product-feature changes: Phases 5–9.

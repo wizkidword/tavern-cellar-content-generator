@@ -50,6 +50,12 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
       <div className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-5 py-6 md:px-8 xl:px-10">
         <FoundryNav />
 
+        {!data.syncHealth.lastSuccessfulFullSync || data.syncHealth.latestRun?.mode === "PUBLIC_ONLY" ? (
+          <section className="message message-error mb-6">
+            Duplicate and opportunity scores are using incomplete WordPress coverage. Run a successful full private sync before relying on them for editorial decisions.
+          </section>
+        ) : null}
+
         <section className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
           <aside className="panel rounded-[2rem] p-6 md:p-8">
             <p className="eyebrow mb-3">New Opportunity</p>
