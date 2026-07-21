@@ -112,7 +112,7 @@ export async function getIntelligenceData() {
 }
 
 export async function getOpportunityListData() {
-  const [allCategories, opportunities, latestSyncRun, lastSuccessfulFullSync] = await Promise.all([
+  const [allCategories, opportunities, liveWordPressPosts, latestSyncRun, lastSuccessfulFullSync] = await Promise.all([
     prisma.category.findMany({
       orderBy: [{ postCount: "desc" }, { name: "asc" }],
     }),
@@ -121,8 +121,27 @@ export async function getOpportunityListData() {
         category: true,
         internalLinks: true,
         similarPosts: true,
+        generatedArticle: {
+          select: {
+            id: true,
+            status: true,
+            wpPostId: true,
+            wpStatus: true,
+            publishedAt: true,
+          },
+        },
       },
       orderBy: [{ status: "asc" }, { overallScore: "desc" }, { updatedAt: "desc" }],
+    }),
+    prisma.sitePost.findMany({
+      where: {
+        isStale: false,
+        wpStatus: "publish",
+      },
+      select: {
+        wpPostId: true,
+        link: true,
+      },
     }),
     prisma.wordPressSyncRun.findFirst({
       orderBy: { startedAt: "desc" },
@@ -136,11 +155,27 @@ export async function getOpportunityListData() {
     }),
   ]);
 
+  const livePostLinks = new Map(
+    liveWordPressPosts.map((post) => [post.wpPostId, post.link]).filter(
+      (entry): entry is [number, string] => Boolean(entry[1]),
+    ),
+  );
+
   return {
     categories: sortCategoriesForApp(
       allCategories.filter(isActiveAppCategory),
     ),
-    opportunities,
+    opportunities: opportunities.map((opportunity) => ({
+      ...opportunity,
+      generatedArticle: opportunity.generatedArticle
+        ? {
+            ...opportunity.generatedArticle,
+            livePostLink: opportunity.generatedArticle.wpPostId
+              ? livePostLinks.get(opportunity.generatedArticle.wpPostId) ?? null
+              : null,
+          }
+        : null,
+    })),
     syncHealth: {
       latestRun: latestSyncRun,
       lastSuccessfulFullSync,

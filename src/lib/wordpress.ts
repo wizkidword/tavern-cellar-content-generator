@@ -1,4 +1,5 @@
 import {
+  ArticleStatus,
   type Article,
   type ArticleBodyImage,
   type Category,
@@ -569,6 +570,52 @@ export function parseWordPressScheduledDate(input: {
   return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
 }
 
+/**
+ * Turns the status WordPress reports during a private catalog sync into the
+ * matching local article state. This is intentionally only used for articles
+ * that already have a WordPress post ID: WordPress is the source of truth once
+ * a draft has been sent there.
+ */
+export function resolveArticleSyncStateFromWordPress(input: {
+  date?: string | null;
+  date_gmt?: string | null;
+  siteTimezone?: string | null;
+  status?: string | null;
+}) {
+  const wpStatus = input.status?.trim().toLowerCase() || "publish";
+
+  if (wpStatus === "publish") {
+    return {
+      status: ArticleStatus.PUBLISHED,
+      wpStatus,
+      publishedAt: parseWordPressScheduledDate(input),
+      scheduledFor: null,
+      scheduledForLocal: null,
+      scheduledForTimezone: null,
+    };
+  }
+
+  if (wpStatus === "future") {
+    return {
+      status: ArticleStatus.SCHEDULED,
+      wpStatus,
+      publishedAt: null,
+      scheduledFor: parseWordPressScheduledDate(input),
+      scheduledForLocal: input.date?.trim().replace(" ", "T").slice(0, 16) || null,
+      scheduledForTimezone: input.siteTimezone?.trim() || null,
+    };
+  }
+
+  return {
+    status: ArticleStatus.WP_DRAFT,
+    wpStatus,
+    publishedAt: null,
+    scheduledFor: null,
+    scheduledForLocal: null,
+    scheduledForTimezone: null,
+  };
+}
+
 export async function fetchAllWordPressPosts(input: {
   mode: WordPressSyncModeInput;
   headers?: HeadersInit;
@@ -764,6 +811,22 @@ export async function syncWordPressCatalog(input: {
       );
     }
 
+    let reconciledArticleCount = 0;
+
+    if (mode === "FULL_PRIVATE") {
+      for (const postBatch of inBatches(postResult.posts, 50)) {
+        const updates = await prisma.$transaction(
+          postBatch.map((post) =>
+            prisma.article.updateMany({
+              where: { wpPostId: post.id },
+              data: resolveArticleSyncStateFromWordPress({ ...post, siteTimezone }),
+            }),
+          ),
+        );
+        reconciledArticleCount += updates.reduce((count, update) => count + update.count, 0);
+      }
+    }
+
     let stalePostCount = 0;
     let staleCategoryCount = 0;
 
@@ -809,6 +872,7 @@ export async function syncWordPressCatalog(input: {
       categoryCount: categoryResult.categories.length,
       mode,
       postCount: postResult.posts.length,
+      reconciledArticleCount,
       siteTimezone,
       staleCategoryCount,
       stalePostCount,

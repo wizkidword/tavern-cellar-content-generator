@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { AppError } from "@/lib/errors/app-error";
-import { fetchAllWordPressPosts } from "@/lib/wordpress";
+import { fetchAllWordPressPosts, resolveArticleSyncStateFromWordPress } from "@/lib/wordpress";
 import { formatDateTimeInWordPressTimeZone } from "@/lib/wordpress-timezone";
 
 type EnvironmentSnapshot = Record<string, string | undefined>;
@@ -159,4 +159,30 @@ test("converts one stored UTC instant to the exact WordPress local schedule targ
   assert.equal(formatDateTimeInWordPressTimeZone(instant, "America/New_York"), "2026-07-21T14:30");
   assert.equal(formatDateTimeInWordPressTimeZone(instant, "UTC+05:30"), "2026-07-22T00:00");
   assert.equal(formatDateTimeInWordPressTimeZone(instant, "not-a-time-zone"), null);
+});
+
+test("maps private sync WordPress statuses to the matching Foundry article state", () => {
+  const published = resolveArticleSyncStateFromWordPress({
+    status: "publish",
+    date: "2026-07-21T12:00:00",
+    date_gmt: "2026-07-21T16:00:00",
+  });
+  const scheduled = resolveArticleSyncStateFromWordPress({
+    status: "future",
+    date: "2026-07-24T14:30:00",
+    date_gmt: "2026-07-24T18:30:00",
+    siteTimezone: "America/New_York",
+  });
+  const draft = resolveArticleSyncStateFromWordPress({ status: "draft" });
+
+  assert.equal(published.status, "PUBLISHED");
+  assert.equal(published.wpStatus, "publish");
+  assert.equal(published.publishedAt?.toISOString(), "2026-07-21T16:00:00.000Z");
+  assert.equal(scheduled.status, "SCHEDULED");
+  assert.equal(scheduled.wpStatus, "future");
+  assert.equal(scheduled.scheduledFor?.toISOString(), "2026-07-24T18:30:00.000Z");
+  assert.equal(scheduled.scheduledForLocal, "2026-07-24T14:30");
+  assert.equal(scheduled.scheduledForTimezone, "America/New_York");
+  assert.equal(draft.status, "WP_DRAFT");
+  assert.equal(draft.wpStatus, "draft");
 });

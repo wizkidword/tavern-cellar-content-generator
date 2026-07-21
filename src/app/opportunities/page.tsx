@@ -27,6 +27,41 @@ function statusClassName(status: string) {
   return `status-pill status-${status.toLowerCase()}`;
 }
 
+function generatedArticleState(
+  article: {
+    id: string;
+    status: string;
+    wpStatus: string | null;
+    livePostLink: string | null;
+  } | null,
+) {
+  if (!article) {
+    return null;
+  }
+
+  if (article.status === "PUBLISHED" || article.wpStatus?.toLowerCase() === "publish") {
+    return {
+      label: "Published on WordPress",
+      link: article.livePostLink,
+      tone: "status-published",
+    };
+  }
+
+  if (article.status === "SCHEDULED" || article.wpStatus?.toLowerCase() === "future") {
+    return {
+      label: "Scheduled in WordPress",
+      link: null,
+      tone: "status-scheduled",
+    };
+  }
+
+  return {
+    label: "Foundry draft ready",
+    link: null,
+    tone: "status-wp_draft",
+  };
+}
+
 export default async function OpportunitiesPage({ searchParams }: OpportunitiesPageProps) {
   await requireOperatorPage();
   const params = searchParams ? await searchParams : undefined;
@@ -209,6 +244,7 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
               {opportunities.map((opportunity) => {
                 const reasons = parseScoreReasons(opportunity.scoreReasons);
                 const canDelete = canDeleteOpportunity(opportunity.status);
+                const articleState = generatedArticleState(opportunity.generatedArticle);
 
                 return (
                   <div
@@ -244,6 +280,31 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
 
                         {reasons[0] ? <p className="mt-3 text-sm text-[#d7bf95]">{reasons[0]}</p> : null}
                       </Link>
+
+                      {articleState ? (
+                        <div className="flex min-w-[11rem] flex-col items-start gap-2">
+                          <span className={`status-pill ${articleState.tone}`}>
+                            {articleState.label}
+                          </span>
+                          {articleState.link ? (
+                            <a
+                              className="text-sm font-semibold text-[#edb65f] underline underline-offset-4"
+                              href={articleState.link}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              View live post
+                            </a>
+                          ) : (
+                            <Link
+                              className="text-sm font-semibold text-[#edb65f] underline underline-offset-4"
+                              href={`/articles/${opportunity.generatedArticle?.id}`}
+                            >
+                              Open Foundry draft
+                            </Link>
+                          )}
+                        </div>
+                      ) : null}
 
                       {canDelete ? (
                         <DeleteOpportunityButton
