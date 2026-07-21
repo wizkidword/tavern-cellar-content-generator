@@ -30,6 +30,8 @@ OPENAI_API_KEY="your-openai-api-key"
 OPENAI_TEXT_MODEL="gpt-5.4-mini"
 OPENAI_IMAGE_MODEL="gpt-image-2"
 WORDPRESS_URL="https://taverncellar.com"
+# Optional: direct WordPress origin IP when the public proxy challenges Foundry.
+WORDPRESS_ORIGIN_IP=""
 WORDPRESS_USERNAME="your-wordpress-username"
 WORDPRESS_APP_PASSWORD="your-wordpress-application-password"
 WORDPRESS_SYNC_STALE_HOURS="24"
@@ -47,6 +49,7 @@ Important:
 - OpenAI image generation lets you choose `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, or `gpt-image-1-mini` from the form. `OPENAI_IMAGE_MODEL` is only the environment default.
 - fal.ai image generation can use `fal-ai/flux-2`, `fal-ai/flux-2-pro`, or `fal-ai/flux-2-flex`. `FAL_IMAGE_MODEL` is the default when a screen does not send an explicit model choice.
 - For WordPress publishing, use an application password for the account that should create posts.
+- If a public proxy blocks the Foundry server with a browser challenge, set `WORDPRESS_ORIGIN_IP` to the confirmed WordPress origin IP. Foundry will still use `WORDPRESS_URL` for the secure hostname and WordPress host checks; normal site visitors are unaffected.
 - Leaving spaces in the WordPress application password inside `.env` is fine; the app strips them before authenticating.
 - Set `FOUNDRY_OPERATOR_TOKEN` to a unique credential of at least 16 characters. Foundry uses it only on the login page and never stores it in browser-visible state.
 - Set `SESSION_SECRET` to at least 32 random bytes. You can generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.

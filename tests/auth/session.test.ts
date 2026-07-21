@@ -15,7 +15,7 @@ import {
   verifyOperatorSessionToken,
 } from "@/lib/auth/session";
 import { proxy } from "@/proxy";
-import { validateWordPressUrl } from "@/lib/env";
+import { validateWordPressOriginIp, validateWordPressUrl } from "@/lib/env";
 import { NextRequest } from "next/server";
 
 const secret = "0123456789abcdef0123456789abcdef";
@@ -60,6 +60,16 @@ test("requires HTTPS for non-local WordPress endpoints", () => {
   assert.throws(
     () => validateWordPressUrl("http://wordpress.example.test"),
     /WORDPRESS_URL must use HTTPS/,
+  );
+});
+
+test("validates an optional direct WordPress origin route", () => {
+  assert.equal(validateWordPressOriginIp(undefined), undefined);
+  assert.equal(validateWordPressOriginIp(" 192.0.2.10 "), "192.0.2.10");
+  assert.equal(validateWordPressOriginIp("2001:db8::1"), "2001:db8::1");
+  assert.throws(
+    () => validateWordPressOriginIp("wordpress.example.test"),
+    /WORDPRESS_ORIGIN_IP must be a valid IPv4 or IPv6 address/,
   );
 });
 

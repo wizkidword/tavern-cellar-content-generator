@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isIP } from "node:net";
 
 import {
   DEFAULT_OPENAI_TEXT_MODEL,
@@ -29,6 +30,7 @@ const serverEnvSchema = z.object({
   FAL_IMAGE_MODEL: z.enum(FAL_IMAGE_MODEL_IDS).default(DEFAULT_FAL_IMAGE_MODEL),
   FAL_IMAGE_QUALITY: z.enum(FAL_IMAGE_QUALITY_IDS).default(DEFAULT_FAL_IMAGE_QUALITY),
   WORDPRESS_URL: z.string().url().default("https://taverncellar.com"),
+  WORDPRESS_ORIGIN_IP: z.string().optional(),
   WORDPRESS_USERNAME: z.string().optional(),
   WORDPRESS_APP_PASSWORD: z.string().optional(),
   WORDPRESS_SYNC_STALE_HOURS: z.coerce.number().int().min(1).max(168).default(24),
@@ -58,6 +60,20 @@ export function validateWordPressUrl(value: string) {
   throw new Error("WORDPRESS_URL must use HTTPS unless it targets localhost for development.");
 }
 
+export function validateWordPressOriginIp(value: string | undefined) {
+  const normalized = value?.trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (!isIP(normalized)) {
+    throw new Error("WORDPRESS_ORIGIN_IP must be a valid IPv4 or IPv6 address.");
+  }
+
+  return normalized;
+}
+
 export function getServerEnv() {
   const env = serverEnvSchema.parse({
     DATABASE_URL: process.env.DATABASE_URL ?? "file:./dev.db",
@@ -69,6 +85,7 @@ export function getServerEnv() {
     FAL_IMAGE_MODEL: process.env.FAL_IMAGE_MODEL,
     FAL_IMAGE_QUALITY: process.env.FAL_IMAGE_QUALITY,
     WORDPRESS_URL: process.env.WORDPRESS_URL,
+    WORDPRESS_ORIGIN_IP: process.env.WORDPRESS_ORIGIN_IP,
     WORDPRESS_USERNAME: process.env.WORDPRESS_USERNAME,
     WORDPRESS_APP_PASSWORD: process.env.WORDPRESS_APP_PASSWORD,
     WORDPRESS_SYNC_STALE_HOURS: process.env.WORDPRESS_SYNC_STALE_HOURS,
@@ -80,7 +97,10 @@ export function getServerEnv() {
   });
 
   validateWordPressUrl(env.WORDPRESS_URL);
-  return env;
+  return {
+    ...env,
+    WORDPRESS_ORIGIN_IP: validateWordPressOriginIp(env.WORDPRESS_ORIGIN_IP),
+  };
 }
 
 export function getOperatorAuthConfig(): OperatorAuthConfig & {

@@ -13,6 +13,7 @@ import { prisma } from "@/lib/db";
 import { AppError, toAppError } from "@/lib/errors/app-error";
 import { getServerEnv, requireWordPressAuthEnv } from "@/lib/env";
 import { fetchWithPolicy } from "@/lib/http/fetch-policy";
+import { withWordPressOriginTransport } from "@/lib/http/wordpress-origin";
 import { renderSanitizedArticleHtml } from "@/lib/rendering/sanitize-html";
 import { serializeWordPressCategoryIds } from "@/lib/serialized-values";
 import { isAllowedAppCategorySlug } from "@/lib/category-config";
@@ -310,7 +311,7 @@ async function buildWordPressError(response: Response) {
 async function fetchWordPressRead(url: string, init: RequestInit = {}) {
   return fetchWithPolicy(
     url,
-    { ...init, cache: "no-store" },
+    withWordPressOriginTransport(url, { ...init, cache: "no-store" }),
     { service: "wordpress", timeoutMs: 12_000, retries: 2 },
   );
 }
@@ -318,7 +319,7 @@ async function fetchWordPressRead(url: string, init: RequestInit = {}) {
 async function fetchWordPressWrite(url: string, init: RequestInit) {
   return fetchWithPolicy(
     url,
-    { ...init, cache: "no-store" },
+    withWordPressOriginTransport(url, { ...init, cache: "no-store" }),
     { service: "wordpress", timeoutMs: 20_000, retries: 0, uncertainWrite: true },
   );
 }

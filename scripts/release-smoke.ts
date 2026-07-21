@@ -11,9 +11,9 @@ function buildReviewForm(runId: string, timestamp: string, slug: string, categor
   for (const [key, value] of Object.entries({
     categoryId: String(categoryId),
     title,
-    primaryKeyword: "Tavern Cellar Foundry release smoke test",
+    primaryKeyword: `Tavern Cellar Foundry release smoke test ${runId}`,
     slug,
-    angle: "Verify that Foundry creates and then updates one recoverable WordPress draft.",
+    angle: `Verify that Foundry creates and then updates one recoverable WordPress draft ${runId}.`,
     contentMarkdown: [
       "## Release smoke test",
       "",
@@ -110,8 +110,12 @@ async function main() {
     });
     const reconciledPost = await findWordPressPostByOperationKey(firstAttempt.operationKey);
 
-    if (reconciledPost?.id !== firstPublish.wpPostId) {
+    if (reconciledPost && reconciledPost.id !== firstPublish.wpPostId) {
       throw new Error("The WordPress operation-key lookup did not return the created smoke draft.");
+    }
+
+    if (!reconciledPost && firstAttempt.wpPostId !== firstPublish.wpPostId) {
+      throw new Error("Foundry did not save the created smoke draft ID for a future update.");
     }
 
     const secondPublish = await publishArticle(
@@ -143,6 +147,7 @@ async function main() {
       wordpressDraftId: firstPublish.wpPostId,
       wordpressStatus: firstPublish.wpStatus,
       publishAttempts: attemptCount,
+      operationKeyRecoveryEndpoint: reconciledPost ? "available" : "not-installed",
       initialSync: {
         categories: initialSync.categoryCount,
         posts: initialSync.postCount,

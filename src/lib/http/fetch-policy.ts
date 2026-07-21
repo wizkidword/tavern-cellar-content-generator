@@ -7,6 +7,10 @@ type FetchPolicy = {
   uncertainWrite?: boolean;
 };
 
+export type FetchRequestInit = RequestInit & {
+  dispatcher?: unknown;
+};
+
 function retryDelay(attempt: number) {
   return 120 * 2 ** attempt + Math.floor(Math.random() * 80);
 }
@@ -29,7 +33,7 @@ function failureCodeFor(policy: FetchPolicy, timedOut: boolean) {
 
 export async function fetchWithPolicy(
   input: RequestInfo | URL,
-  init: RequestInit,
+  init: FetchRequestInit,
   policy: FetchPolicy,
 ): Promise<Response> {
   const retries = policy.retries ?? 0;
@@ -40,10 +44,13 @@ export async function fetchWithPolicy(
     const timeout = setTimeout(() => controller.abort(), policy.timeoutMs);
 
     try {
-      const response = await fetch(input, {
-        ...init,
-        signal: controller.signal,
-      });
+      const response = await fetch(
+        input,
+        {
+          ...init,
+          signal: controller.signal,
+        } as RequestInit,
+      );
 
       if (attempt < retries && shouldRetryStatus(response.status)) {
         await response.body?.cancel();
