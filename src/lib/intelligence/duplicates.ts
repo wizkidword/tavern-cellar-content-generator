@@ -4,6 +4,7 @@ import {
   scoreTokenOverlap,
   tokenizeForSearch,
 } from "@/lib/intelligence/text";
+import { filterLowInformationDuplicateTerms } from "@/lib/intelligence/duplicate-config";
 
 export type DuplicateSource = "app" | "site";
 export type DuplicateRiskLabel = "fresh" | "adjacent" | "crowded" | "too_similar";
@@ -20,6 +21,7 @@ export type DuplicateCandidate = {
 export type DuplicateRiskMatch = DuplicateCandidate & {
   similarity: number;
   reason: string;
+  explanation: string;
 };
 
 export type DuplicateRiskAssessment = {
@@ -54,16 +56,35 @@ function labelFromSimilarity(similarity: number): DuplicateRiskLabel {
   return "fresh";
 }
 
-function explainSimilarity(similarity: number, source: DuplicateSource) {
-  if (similarity >= 85) {
-    return `Strong overlap with existing ${source === "app" ? "local" : "WordPress"} coverage.`;
+function explainSimilarity(input: {
+  similarity: number;
+  source: DuplicateSource;
+  desiredTokens: string[];
+  candidateTokens: string[];
+}) {
+  const matchedTokens = input.desiredTokens.filter((token) => input.candidateTokens.includes(token));
+  const evidence = matchedTokens.length > 0
+    ? `Shared terms: ${matchedTokens.slice(0, 6).join(", ")}.`
+    : "Similarity came from the requested angle rather than a shared title term.";
+
+  if (input.similarity >= 85) {
+    return {
+      reason: `Strong overlap with existing ${input.source === "app" ? "local" : "WordPress"} coverage.`,
+      explanation: `${evidence} Exact title matches always block drafting.`,
+    };
   }
 
-  if (similarity >= 65) {
-    return "High topic overlap; revise the angle before drafting.";
+  if (input.similarity >= 65) {
+    return {
+      reason: "High topic overlap; revise the angle before drafting.",
+      explanation: `${evidence} Broad terms such as “review” and “retro” are ignored unless no better evidence exists.`,
+    };
   }
 
-  return "Some overlap, but the angle may still be distinct.";
+  return {
+    reason: "Some overlap, but the angle may still be distinct.",
+    explanation: evidence,
+  };
 }
 
 function calculateSimilarity(input: {
@@ -76,37 +97,59 @@ function calculateSimilarity(input: {
   const existingTitle = normalizeSearchText(input.candidate.title);
 
   if (desiredTitle && desiredTitle === existingTitle) {
-    return 100;
+    return {
+      similarity: 100,
+      desiredTitleTokens: filterLowInformationDuplicateTerms(tokenizeForSearch(input.title || input.keyword)),
+      candidateTitleTokens: filterLowInformationDuplicateTerms(tokenizeForSearch(input.candidate.title)),
+    };
   }
 
-  const titleScore = scoreTokenOverlap(
+  const desiredTitleTokens = filterLowInformationDuplicateTerms(
     tokenizeForSearch(input.title || input.keyword),
+  );
+  const candidateTitleTokens = filterLowInformationDuplicateTerms(
     tokenizeForSearch(input.candidate.title),
   );
-  const angleScore = scoreTokenOverlap(tokenizeForSearch(input.angle), tokenizeForSearch(input.candidate.angle));
+  const desiredAngleTokens = filterLowInformationDuplicateTerms(tokenizeForSearch(input.angle));
+  const candidateAngleTokens = filterLowInformationDuplicateTerms(tokenizeForSearch(input.candidate.angle));
+  const keywordTokens = filterLowInformationDuplicateTerms(tokenizeForSearch(input.keyword));
+  const titleScore = scoreTokenOverlap(desiredTitleTokens, candidateTitleTokens);
+  const angleScore = scoreTokenOverlap(desiredAngleTokens, candidateAngleTokens);
   const keywordCoverage = Math.max(
-    scoreTokenCoverage(tokenizeForSearch(input.candidate.title), tokenizeForSearch(input.keyword)),
-    scoreTokenCoverage(tokenizeForSearch(input.candidate.angle), tokenizeForSearch(input.keyword)),
+    scoreTokenCoverage(candidateTitleTokens, keywordTokens),
+    scoreTokenCoverage(candidateAngleTokens, keywordTokens),
   );
 
-  return Math.max(titleScore, angleScore, Math.round(keywordCoverage * 0.75));
+  return {
+    similarity: Math.max(titleScore, angleScore, Math.round(keywordCoverage * 0.75)),
+    desiredTitleTokens,
+    candidateTitleTokens,
+  };
 }
 
 export function assessDuplicateRisk(input: AssessDuplicateRiskInput): DuplicateRiskAssessment {
   const matches = [...input.localArticles, ...input.sitePosts]
     .filter((candidate) => candidate.categoryId === input.categoryId)
     .map((candidate) => {
-      const similarity = calculateSimilarity({
+      const comparison = calculateSimilarity({
         keyword: input.keyword,
         title: input.title ?? input.keyword,
         angle: input.angle,
         candidate,
       });
 
+      const explanation = explainSimilarity({
+        similarity: comparison.similarity,
+        source: candidate.source,
+        desiredTokens: comparison.desiredTitleTokens,
+        candidateTokens: comparison.candidateTitleTokens,
+      });
+
       return {
         ...candidate,
-        similarity,
-        reason: explainSimilarity(similarity, candidate.source),
+        similarity: comparison.similarity,
+        reason: explanation.reason,
+        explanation: explanation.explanation,
       };
     })
     .filter((candidate) => candidate.similarity >= 40)

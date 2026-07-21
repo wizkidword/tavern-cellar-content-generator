@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   recommendInternalLinks,
-  resolveGeneratedInternalLinks,
+  resolveVerifiedInternalLinks,
   type InternalLinkCandidate,
 } from "@/lib/intelligence/internal-links";
 import { normalizeSearchText, scoreTokenOverlap, tokenizeForSearch } from "@/lib/intelligence/text";
@@ -106,13 +106,11 @@ test("uses a synced slug when a matching post has no link", () => {
   assert.match(draftRecommendation?.reason ?? "", /draft/i);
 });
 
-test("resolves generated internal link text to real synced published URLs", () => {
-  const links = resolveGeneratedInternalLinks({
+test("resolves only verified synced internal links", () => {
+  const links = resolveVerifiedInternalLinks({
     keyword: "1950s cereal ads",
     angle: "Use the ads to unpack sweetness and scientific nutrition in postwar kitchens.",
     brief: "Focus on package mascots and the changing American pantry.",
-    generatedLinksText:
-      "Imaginary Tavern Cellar pantry piece - https://taverncellar.test/made-up-link/",
     categoryId: 5,
     candidates,
     categoryFallback: {
@@ -123,16 +121,13 @@ test("resolves generated internal link text to real synced published URLs", () =
 
   assert.match(links, /1950s Cereal Ads Made Breakfast a Family Stage/);
   assert.match(links, /https:\/\/taverncellar\.test\/1950s-cereal-ads-breakfast-family-stage\//);
-  assert.doesNotMatch(links, /made-up-link/);
 });
 
 test("falls back to the root category when no public synced link makes sense", () => {
-  const links = resolveGeneratedInternalLinks({
+  const links = resolveVerifiedInternalLinks({
     keyword: "vintage mascot advertising",
     angle: "Show how cereal package characters became trusted commercial hosts.",
     brief: "Connect mascots, package design, and early breakfast branding.",
-    generatedLinksText:
-      "Vintage Mascot Advertising Before Saturday Morning TV - /vintage-mascot-advertising-before-tv",
     categoryId: 5,
     candidates: [candidates[1], candidates[2]],
     categoryFallback: {

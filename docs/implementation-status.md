@@ -93,6 +93,18 @@ Status: complete on 2026-07-21.
 - **Schema and migration notes:** Added `20260721201500_opportunity_lifecycle_and_cluster_ownership`. The local SQLite database was automatically backed up before it applied. Existing opportunities retain their state; existing clusters/items are treated as `AUTO` so the next reconcile can clean stale machine-generated membership without changing manual records.
 - **Verification:** `npm test` has 130 passing tests, including lifecycle transition and retry-state coverage. ESLint, TypeScript, Prisma validation, migration status/diff, the fresh-and-legacy SQLite migration rehearsal, and a Next.js production build passed.
 
+## Phase 8 — efficient AI use and clearer editorial intelligence
+
+Status: complete on 2026-07-21.
+
+- **AI-01:** Article-generation JSON no longer asks the model to invent internal-link titles, slugs, or URLs. The content pipeline now selects final links exclusively from verified, synced records using the deterministic keyword/angle/brief resolver. Model-written prose remains unchanged.
+- **AI-02:** Added durable `GenerationRun` telemetry for article drafts, comparison drafts, opportunity ideas, keyword ideas, and angle ideas. Each run records operation, provider/model, prompt version, start/end time, latency, returned token counts, optional article/opportunity reference, retry count, final state, and a safe error code. It deliberately stores no API keys, prompt bodies, or provider responses. Comparison generations now retain history rather than overwriting a prior result for the same model.
+- **AI-03:** Prompt/schema versions are explicit. Article, opportunity, keyword, and angle prompts use clear untrusted-data boundaries and instruct the model not to follow instructions embedded in editorial notes, titles, WordPress evidence, or other supplied reference text. Existing structured-output schemas and bounded token limits remain enforced.
+- **INT-01:** Deterministic duplicate scoring now filters a small reviewed set of low-information terms for fuzzy comparisons while preserving exact-title blocking. Stored duplicate evidence explains the shared terms and rule behind a warning so operators can understand why it appeared.
+- **QUAL-01:** Quality analysis tokenizes Markdown with the editor’s Markdown parser, preserves link anchor text when counting words, recognizes setext plus H2/H3 headings, surfaces the previously calculated missing-meta-keyphrase warning, supports category/content-type word-count bands, and separates blocking warnings from editorial suggestions. CTA guidance can be disabled for reference-style content.
+- **Schema and migration notes:** Added `20260721210000_generation_telemetry`. The local SQLite database was backed up before applying it. The same migration removes the one-comparison-per-model uniqueness restriction so historical comparison runs are preserved.
+- **Verification:** `npm test` has 133 passing tests, including deterministic-link, duplicate-calibration, Markdown-quality, and lifecycle coverage. TypeScript, ESLint, Prisma validation, migration status/diff, the fresh-and-legacy SQLite rehearsal, and a Next.js production build passed.
+
 ## Deferred by design
 
-- Product-feature changes: Phases 8–9.
+- Product-feature changes: Phase 9.

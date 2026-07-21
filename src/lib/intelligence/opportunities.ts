@@ -573,7 +573,7 @@ export async function createOpportunityFromInput(
             title: match.title,
             status: match.status,
             similarity: match.similarity,
-            reason: match.reason,
+            reason: `${match.reason} ${match.explanation}`,
           })),
         });
       }
@@ -839,6 +839,7 @@ export async function createArticleFromOpportunity(
       falImageModel: options.falImageModel,
       openAiImageModel: options.openAiImageModel,
       bodyImageCount: options.bodyImageCount,
+      generationTelemetry: { opportunityId: opportunity.id },
     });
     const article = await prisma.$transaction(async (transaction) => {
       const stillClaimed = await transaction.contentOpportunity.count({

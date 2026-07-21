@@ -34,7 +34,7 @@ import {
 import { analyzeArticleQuality } from "@/lib/intelligence/article-quality";
 import { assessDuplicateRisk } from "@/lib/intelligence/duplicates";
 import {
-  resolveGeneratedInternalLinks,
+  resolveVerifiedInternalLinks,
   type InternalLinkCandidate,
 } from "@/lib/intelligence/internal-links";
 import {
@@ -88,6 +88,10 @@ export type GenerateArticleRequest = {
   falImageModel?: FalImageModel;
   openAiImageModel?: OpenAIImageModel;
   bodyImageCount?: number;
+  generationTelemetry?: {
+    articleId?: string;
+    opportunityId?: string;
+  };
 };
 
 export type PreparedArticleDraft = {
@@ -686,13 +690,11 @@ async function resolveArticleInternalLinks(input: {
   primaryKeyword: string;
   angle: string;
   brief: string;
-  generatedLinksText: string;
 }) {
-  return resolveGeneratedInternalLinks({
+  return resolveVerifiedInternalLinks({
     keyword: input.primaryKeyword,
     angle: input.angle,
     brief: input.brief,
-    generatedLinksText: input.generatedLinksText,
     categoryId: input.category.id,
     candidates: await getInternalLinkCandidates(),
     categoryFallback: {
@@ -844,6 +846,7 @@ export async function prepareArticleDraft(
     notes: request.notes,
     recentTitles,
     textModel,
+    telemetry: request.generationTelemetry,
   });
 
   const canonicalTopicKey = buildCanonicalTopicKey(
@@ -873,7 +876,6 @@ export async function prepareArticleDraft(
     primaryKeyword: generated.primaryKeyword,
     angle: generated.angle,
     brief: [request.notes, generated.excerpt].filter(Boolean).join("\n"),
-    generatedLinksText: generated.internalLinksText,
   });
   const quality = analyzeArticleQuality({
     title: generated.title,
@@ -882,6 +884,7 @@ export async function prepareArticleDraft(
     metaTitle: generated.metaTitle,
     metaDescription: generated.metaDescription,
     internalLinks,
+    categorySlug: category.slug,
   });
 
   return {
@@ -1014,13 +1017,13 @@ export async function generateArticleModelComparison(
     notes: sourceArticle.notes ?? undefined,
     recentTitles,
     textModel,
+    telemetry: { articleId: sourceArticle.id },
   });
   const internalLinks = await resolveArticleInternalLinks({
     category: sourceArticle.category,
     primaryKeyword: generated.primaryKeyword,
     angle: generated.angle,
     brief: [sourceArticle.notes, generated.excerpt].filter(Boolean).join("\n"),
-    generatedLinksText: generated.internalLinksText,
   });
   const quality = analyzeArticleQuality({
     title: generated.title,
@@ -1029,41 +1032,13 @@ export async function generateArticleModelComparison(
     metaTitle: generated.metaTitle,
     metaDescription: generated.metaDescription,
     internalLinks,
+    categorySlug: sourceArticle.category.slug,
   });
 
-  return prisma.articleModelComparison.upsert({
-    where: {
-      sourceArticleId_openAiTextModel: {
-        sourceArticleId: sourceArticle.id,
-        openAiTextModel: generated.textModel,
-      },
-    },
-    create: {
+  return prisma.articleModelComparison.create({
+    data: {
       sourceArticleId: sourceArticle.id,
       openAiTextModel: generated.textModel,
-      title: generated.title,
-      angle: generated.angle,
-      primaryKeyword: generated.primaryKeyword,
-      slug: slugify(generated.slug || generated.title),
-      contentMarkdown: generated.contentMarkdown.trim(),
-      metaTitle: generated.metaTitle.trim(),
-      metaDescription: generated.metaDescription.trim(),
-      excerpt: generated.excerpt.trim(),
-      tags: generated.tagsText,
-      internalLinks,
-      featuredImagePrompt: generated.featuredImagePrompt.trim(),
-      featuredImageAlt: generated.featuredImageAlt.trim(),
-      qualityWordCount: quality.wordCount,
-      qualityHeadingCount: quality.headingCount,
-      qualityMetaTitleLength: quality.metaTitleLength,
-      qualityMetaDescriptionLength: quality.metaDescriptionLength,
-      qualityInternalLinkCount: quality.internalLinkCount,
-      qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
-      qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
-      qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
-      qualityWarnings: serializeStringArray(quality.warnings),
-    },
-    update: {
       title: generated.title,
       angle: generated.angle,
       primaryKeyword: generated.primaryKeyword,

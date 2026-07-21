@@ -68,6 +68,20 @@ enum TopicClusterSource {
   MANUAL
 }
 
+enum GenerationOperation {
+  ARTICLE_DRAFT
+  ARTICLE_COMPARISON
+  OPPORTUNITY_IDEAS
+  KEYWORD_IDEAS
+  ANGLE_IDEAS
+}
+
+enum GenerationRunState {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
 enum TopicClusterItemType {
   SITE_POST
   ARTICLE
@@ -184,6 +198,7 @@ model Article {
   publishAttempts         PublishAttempt[]
   opportunitySimilarPosts OpportunitySimilarPost[]
   topicClusterItems       TopicClusterItem[]
+  generationRuns          GenerationRun[]
 
   @@unique([categoryId, canonicalTopicKey])
   @@unique([categoryId, slug])
@@ -283,7 +298,7 @@ model ArticleModelComparison {
 
   sourceArticle Article @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
 
-  @@unique([sourceArticleId, openAiTextModel])
+  @@index([sourceArticleId, openAiTextModel])
   @@index([sourceArticleId])
   @@index([openAiTextModel])
 }
@@ -321,12 +336,42 @@ model ContentOpportunity {
   internalLinks     OpportunityInternalLink[]
   similarPosts      OpportunitySimilarPost[]
   topicClusterItems TopicClusterItem[]
+  generationRuns    GenerationRun[]
 
   @@unique([categoryId, normalizedKeyword, normalizedAngle])
   @@index([categoryId])
   @@index([status])
   @@index([generationAttemptKey])
   @@index([overallScore])
+}
+
+model GenerationRun {
+  id                  String               @id @default(cuid())
+  operation           GenerationOperation
+  state               GenerationRunState   @default(RUNNING)
+  articleId           String?
+  opportunityId       String?
+  provider            String
+  model               String
+  promptVersion       String
+  startedAt           DateTime             @default(now())
+  completedAt         DateTime?
+  latencyMs           Int?
+  inputTokens         Int?
+  outputTokens        Int?
+  totalTokens         Int?
+  estimatedCostCents  Int?
+  retryCount          Int                  @default(0)
+  errorCode           String?
+  createdAt           DateTime             @default(now())
+
+  article     Article?            @relation(fields: [articleId], references: [id], onDelete: SetNull)
+  opportunity ContentOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+
+  @@index([operation, startedAt])
+  @@index([state, startedAt])
+  @@index([articleId])
+  @@index([opportunityId])
 }
 
 model OpportunityInternalLink {
