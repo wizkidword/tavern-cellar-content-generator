@@ -3,8 +3,12 @@ import { notFound } from "next/navigation";
 
 import { generateArticleComparisonAction } from "@/app/actions";
 import { getArticleComparisonData } from "@/lib/content-pipeline";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import { parseArticleQualityWarnings } from "@/lib/intelligence/article-quality";
 import { getOpenAITextModelLabel } from "@/lib/openai-models";
+import { requireOperatorPage } from "@/lib/operator-auth";
+
+export const dynamic = "force-dynamic";
 
 type ComparePageProps = {
   params: Promise<{ id: string }>;
@@ -142,6 +146,7 @@ function DraftColumn({
 }
 
 export default async function ArticleComparePage({ params, searchParams }: ComparePageProps) {
+  await requireOperatorPage();
   const { id } = await params;
   const data = await getArticleComparisonData(id);
 
@@ -152,6 +157,7 @@ export default async function ArticleComparePage({ params, searchParams }: Compa
   const query = searchParams ? await searchParams : undefined;
   const message = firstValue(query?.message);
   const error = firstValue(query?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(query?.ref));
   const comparisonDrafts = data.comparisonModels
     .map((model) =>
       data.article.modelComparisons.find(
@@ -191,7 +197,7 @@ export default async function ArticleComparePage({ params, searchParams }: Compa
         </div>
 
         {message ? <p className="message message-success mb-4">{message}</p> : null}
-        {error ? <p className="message message-error mb-4">{error}</p> : null}
+        {error ? <p className="message message-error mb-4">{errorMessage}</p> : null}
 
         {comparisonDrafts.length > 0 ? (
           <section className="grid gap-6 xl:grid-cols-2">

@@ -124,3 +124,42 @@ test("accepts drafts that close by asking readers to share their thoughts", () =
     false,
   );
 });
+
+test("preserves Markdown link anchor text and recognizes setext editor headings", () => {
+  const quality = analyzeArticleQuality({
+    title: "1950s cereal ads and the postwar breakfast pitch",
+    primaryKeyword: "1950s cereal ads",
+    contentMarkdown: [
+      "1950s cereal ads turned breakfast into a bright promise for busy families.",
+      "",
+      "Mascot advertising",
+      "------------------",
+      "[Vintage cereal advertising](https://taverncellar.test/vintage-cereal/) made a familiar pantry feel modern.",
+      "",
+      "## Nutrition promises",
+      repeatedWords(900),
+    ].join("\n"),
+    metaTitle: "1950s Cereal Ads And The Postwar Breakfast Pitch",
+    metaDescription: "1950s cereal ads used mascots, sweetness, and nutrition claims to sell a modern postwar breakfast.",
+    internalLinks: "https://taverncellar.test/vintage-cereal/",
+    requireReaderEngagementCta: false,
+  });
+
+  assert.equal(quality.headingCount, 2);
+  assert.ok(quality.wordCount >= 900);
+  assert.equal(quality.suggestions.some((warning) => /call to action/i.test(warning)), false);
+});
+
+test("surfaces the missing meta keyphrase as a blocking warning", () => {
+  const quality = analyzeArticleQuality({
+    title: "1950s cereal ads and the postwar breakfast pitch",
+    primaryKeyword: "1950s cereal ads",
+    contentMarkdown: `${repeatedWords(950)}\n\n## Structure\n\n## More structure\n\n## Final structure`,
+    metaTitle: "1950s Cereal Ads And The Postwar Breakfast Pitch",
+    metaDescription: "A look at mascot advertising and postwar breakfast culture.",
+    internalLinks: "https://taverncellar.test/vintage-cereal/",
+    requireReaderEngagementCta: false,
+  });
+
+  assert.ok(quality.blockingWarnings.some((warning) => /meta description/i.test(warning)));
+});

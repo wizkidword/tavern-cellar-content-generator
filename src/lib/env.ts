@@ -14,6 +14,8 @@ import {
   FEATURED_IMAGE_PROVIDER_IDS,
   OPENAI_IMAGE_MODEL_IDS,
 } from "@/lib/featured-image-models";
+import { hasStrongSessionSecret } from "@/lib/auth/session";
+import type { OperatorAuthConfig } from "@/lib/auth/guards";
 
 const serverEnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -29,11 +31,35 @@ const serverEnvSchema = z.object({
   WORDPRESS_URL: z.string().url().default("https://taverncellar.com"),
   WORDPRESS_USERNAME: z.string().optional(),
   WORDPRESS_APP_PASSWORD: z.string().optional(),
+  WORDPRESS_SYNC_STALE_HOURS: z.coerce.number().int().min(1).max(168).default(24),
   FOUNDRY_OPERATOR_TOKEN: z.string().optional(),
+  SESSION_SECRET: z.string().optional(),
+  SESSION_MAX_AGE_HOURS: z.coerce.number().int().min(1).max(168).default(12),
+  APP_ORIGIN: z.string().url().default("http://127.0.0.1:3000"),
+  TRUST_PROXY: z.enum(["true", "false"]).default("false"),
 });
 
+function isLocalHostname(hostname: string) {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
+}
+
+export function validateWordPressUrl(value: string) {
+  const url = new URL(value);
+
+  if (url.protocol === "https:" || (url.protocol === "http:" && isLocalHostname(url.hostname))) {
+    return url;
+  }
+
+  throw new Error("WORDPRESS_URL must use HTTPS unless it targets localhost for development.");
+}
+
 export function getServerEnv() {
-  return serverEnvSchema.parse({
+  const env = serverEnvSchema.parse({
     DATABASE_URL: process.env.DATABASE_URL ?? "file:./dev.db",
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     OPENAI_TEXT_MODEL: process.env.OPENAI_TEXT_MODEL,
@@ -45,8 +71,50 @@ export function getServerEnv() {
     WORDPRESS_URL: process.env.WORDPRESS_URL,
     WORDPRESS_USERNAME: process.env.WORDPRESS_USERNAME,
     WORDPRESS_APP_PASSWORD: process.env.WORDPRESS_APP_PASSWORD,
+    WORDPRESS_SYNC_STALE_HOURS: process.env.WORDPRESS_SYNC_STALE_HOURS,
     FOUNDRY_OPERATOR_TOKEN: process.env.FOUNDRY_OPERATOR_TOKEN,
+    SESSION_SECRET: process.env.SESSION_SECRET,
+    SESSION_MAX_AGE_HOURS: process.env.SESSION_MAX_AGE_HOURS,
+    APP_ORIGIN: process.env.APP_ORIGIN,
+    TRUST_PROXY: process.env.TRUST_PROXY,
   });
+
+  validateWordPressUrl(env.WORDPRESS_URL);
+  return env;
+}
+
+export function getOperatorAuthConfig(): OperatorAuthConfig & {
+  operatorToken: string;
+  maxAgeSeconds: number;
+  secureCookie: boolean;
+} {
+  const env = getServerEnv();
+  const operatorToken = env.FOUNDRY_OPERATOR_TOKEN?.trim();
+  const sessionSecret = env.SESSION_SECRET?.trim();
+
+  if (!operatorToken || operatorToken.length < 16) {
+    throw new Error("FOUNDRY_OPERATOR_TOKEN must be at least 16 characters before Foundry can start.");
+  }
+
+  if (!sessionSecret || !hasStrongSessionSecret(sessionSecret)) {
+    throw new Error("SESSION_SECRET must contain at least 32 random bytes before Foundry can start.");
+  }
+
+  const parsedAppOrigin = new URL(env.APP_ORIGIN);
+
+  if (parsedAppOrigin.protocol !== "http:" && parsedAppOrigin.protocol !== "https:") {
+    throw new Error("APP_ORIGIN must use HTTP or HTTPS.");
+  }
+
+  const appOrigin = parsedAppOrigin.origin;
+
+  return {
+    appOrigin,
+    maxAgeSeconds: env.SESSION_MAX_AGE_HOURS * 60 * 60,
+    operatorToken,
+    sessionSecret,
+    secureCookie: appOrigin.startsWith("https://"),
+  };
 }
 
 export function requireOpenAIEnv() {

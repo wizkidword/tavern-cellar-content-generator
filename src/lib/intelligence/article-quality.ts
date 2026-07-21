@@ -1,4 +1,7 @@
+import { marked } from "marked";
+
 import { normalizeSearchText } from "@/lib/intelligence/text";
+import { parseStringArray } from "@/lib/serialized-values";
 
 export type ArticleQualityInput = {
   title: string;
@@ -7,6 +10,9 @@ export type ArticleQualityInput = {
   metaTitle: string;
   metaDescription: string;
   internalLinks: string;
+  categorySlug?: string;
+  contentType?: "article" | "guide" | "reference";
+  requireReaderEngagementCta?: boolean;
 };
 
 export type ArticleQualityAnalysis = {
@@ -19,14 +25,21 @@ export type ArticleQualityAnalysis = {
   focusKeyphraseInOpening: boolean;
   focusKeyphraseInMetaDescription: boolean;
   readerEngagementCta: boolean;
+  blockingWarnings: string[];
+  suggestions: string[];
   warnings: string[];
 };
 
 function markdownToPlainText(markdown: string) {
-  return markdown
+  // Marked tokenizes the editor's Markdown variants (including ATX and setext
+  // headings). The final cleanup deliberately preserves link anchor text.
+  return marked
+    .lexer(markdown)
+    .map((token) => token.raw)
+    .join("\n")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`[^`]*`/g, " ")
-    .replace(/\[[^\]]+\]\([^)]+\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/[#>*_\-[\]()!]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -39,7 +52,9 @@ function countWords(markdown: string) {
 }
 
 function countHeadings(markdown: string) {
-  return markdown.split(/\r?\n/).filter((line) => /^#{2,3}\s+\S/.test(line.trim())).length;
+  return marked
+    .lexer(markdown)
+    .filter((token) => token.type === "heading" && token.depth >= 2 && token.depth <= 3).length;
 }
 
 function countInternalLinks(value: string) {
@@ -85,42 +100,66 @@ function hasReaderEngagementCta(markdown: string) {
   return readerPromptPatterns.some((pattern) => pattern.test(closing));
 }
 
-function buildWarnings(input: ArticleQualityAnalysis) {
-  const warnings: string[] = [];
+function wordCountMinimum(input: ArticleQualityInput) {
+  if (input.contentType === "reference") {
+    return 650;
+  }
 
-  if (input.wordCount < 900) {
-    warnings.push("Draft is under 900 words; expand before publishing.");
+  if (input.contentType === "guide" || input.categorySlug === "games") {
+    return 1_100;
+  }
+
+  return 900;
+}
+
+function buildWarnings(input: ArticleQualityAnalysis, source: ArticleQualityInput) {
+  const blockingWarnings: string[] = [];
+  const suggestions: string[] = [];
+  const minimum = wordCountMinimum(source);
+
+  if (input.wordCount < minimum) {
+    blockingWarnings.push(`Draft is under ${minimum} words for this content type; expand before publishing.`);
   }
 
   if (input.headingCount < 3) {
-    warnings.push("Add more H2/H3 structure before publishing.");
+    suggestions.push("Add more H2/H3 structure before publishing.");
   }
 
   if (input.metaTitleLength < 35 || input.metaTitleLength > 70) {
-    warnings.push("Meta title should stay between 35 and 70 characters.");
+    blockingWarnings.push("Meta title should stay between 35 and 70 characters.");
   }
 
   if (input.metaDescriptionLength < 120 || input.metaDescriptionLength > 170) {
-    warnings.push("Meta description should stay between 120 and 170 characters.");
+    blockingWarnings.push("Meta description should stay between 120 and 170 characters.");
   }
 
   if (input.internalLinkCount === 0) {
-    warnings.push("Add at least one real internal link suggestion.");
+    suggestions.push("Add at least one real internal link suggestion.");
   }
 
   if (!input.focusKeyphraseInTitle) {
-    warnings.push("Focus keyphrase is missing from the title.");
+    blockingWarnings.push("Focus keyphrase is missing from the title.");
   }
 
   if (!input.focusKeyphraseInOpening) {
-    warnings.push("Focus keyphrase is missing from the opening paragraph.");
+    blockingWarnings.push("Focus keyphrase is missing from the opening paragraph.");
   }
 
-  if (!input.readerEngagementCta) {
-    warnings.push("Add a closing call to action asking readers to share their thoughts.");
+  if (!input.focusKeyphraseInMetaDescription) {
+    blockingWarnings.push("Focus keyphrase is missing from the meta description.");
   }
 
-  return warnings;
+  if (source.requireReaderEngagementCta ?? (source.contentType !== "reference")) {
+    if (!input.readerEngagementCta) {
+      suggestions.push("Add a closing call to action asking readers to share their thoughts.");
+    }
+  }
+
+  return {
+    blockingWarnings,
+    suggestions,
+    warnings: [...blockingWarnings, ...suggestions],
+  };
 }
 
 export function analyzeArticleQuality(input: ArticleQualityInput): ArticleQualityAnalysis {
@@ -145,25 +184,17 @@ export function analyzeArticleQuality(input: ArticleQualityInput): ArticleQualit
       input.primaryKeyword,
     ),
     readerEngagementCta: hasReaderEngagementCta(input.contentMarkdown),
+    blockingWarnings: [],
+    suggestions: [],
     warnings: [],
   };
 
   return {
     ...analysis,
-    warnings: buildWarnings(analysis),
+    ...buildWarnings(analysis, input),
   };
 }
 
 export function parseArticleQualityWarnings(value: string | null | undefined) {
-  try {
-    const parsed = JSON.parse(value ?? "[]") as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is string => typeof item === "string");
-    }
-  } catch {
-    return [];
-  }
-
-  return [];
+  return parseStringArray(value);
 }

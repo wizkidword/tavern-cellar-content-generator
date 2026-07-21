@@ -1,26 +1,18 @@
-import { ArticleStatus } from "@prisma/client";
+import { ArticleStatus, ImageOperationState } from "@prisma/client";
 
 import { isActiveAppCategory, sortCategoriesForApp } from "@/lib/category-config";
 import { prisma } from "@/lib/db";
+import { getServerEnv } from "@/lib/env";
 import { buildTopicClusterDrafts } from "@/lib/intelligence/clusters";
 import { buildCoverageMap } from "@/lib/intelligence/coverage";
+import { parseStringArray } from "@/lib/serialized-values";
 
 export function parseScoreReasons(value: string) {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is string => typeof item === "string");
-    }
-  } catch {
-    return [];
-  }
-
-  return [];
+  return parseStringArray(value);
 }
 
 export async function getIntelligenceData() {
-  const [allCategories, articles, sitePosts, opportunities] = await Promise.all([
+  const [allCategories, articles, sitePosts, opportunities, latestSyncRun, lastSuccessfulFullSync] = await Promise.all([
     prisma.category.findMany({
       orderBy: [{ postCount: "desc" }, { name: "asc" }],
     }),
@@ -58,6 +50,16 @@ export async function getIntelligenceData() {
       orderBy: { updatedAt: "desc" },
       take: 300,
     }),
+    prisma.wordPressSyncRun.findFirst({
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: {
+        mode: "FULL_PRIVATE",
+        state: "SUCCEEDED",
+      },
+      orderBy: { completedAt: "desc" },
+    }),
   ]);
   const categories = sortCategoriesForApp(
     allCategories.filter(isActiveAppCategory),
@@ -82,7 +84,12 @@ export async function getIntelligenceData() {
       totalPosts: sitePosts.length,
       postsWithLinks: sitePosts.filter((post) => Boolean(post.link)).length,
       latestSyncAt,
-      stale: !latestSyncAt || Date.now() - latestSyncAt.getTime() > 24 * 60 * 60 * 1000,
+      latestSyncRun,
+      lastSuccessfulFullSyncAt: lastSuccessfulFullSync?.completedAt ?? null,
+      stale:
+        !lastSuccessfulFullSync?.completedAt ||
+        Date.now() - lastSuccessfulFullSync.completedAt.getTime() >
+          getServerEnv().WORDPRESS_SYNC_STALE_HOURS * 60 * 60 * 1000,
     },
     topicClusters: buildTopicClusterDrafts({
       sitePosts: sitePosts.map((post) => ({
@@ -105,7 +112,7 @@ export async function getIntelligenceData() {
 }
 
 export async function getOpportunityListData() {
-  const [allCategories, opportunities] = await Promise.all([
+  const [allCategories, opportunities, latestSyncRun, lastSuccessfulFullSync] = await Promise.all([
     prisma.category.findMany({
       orderBy: [{ postCount: "desc" }, { name: "asc" }],
     }),
@@ -117,6 +124,16 @@ export async function getOpportunityListData() {
       },
       orderBy: [{ status: "asc" }, { overallScore: "desc" }, { updatedAt: "desc" }],
     }),
+    prisma.wordPressSyncRun.findFirst({
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: {
+        mode: "FULL_PRIVATE",
+        state: "SUCCEEDED",
+      },
+      orderBy: { completedAt: "desc" },
+    }),
   ]);
 
   return {
@@ -124,6 +141,10 @@ export async function getOpportunityListData() {
       allCategories.filter(isActiveAppCategory),
     ),
     opportunities,
+    syncHealth: {
+      latestRun: latestSyncRun,
+      lastSuccessfulFullSync,
+    },
   };
 }
 
@@ -160,4 +181,89 @@ export async function getCalendarData() {
     },
     orderBy: [{ scheduledFor: "asc" }, { updatedAt: "desc" }],
   });
+}
+
+export async function getOperationsData() {
+  const [publishAttempts, syncRuns, generationRuns, imageOperations] = await Promise.all([
+    prisma.publishAttempt.findMany({
+      include: {
+        article: {
+          select: {
+            id: true,
+            title: true,
+            publishState: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 24,
+    }),
+    prisma.wordPressSyncRun.findMany({
+      orderBy: { startedAt: "desc" },
+      take: 16,
+    }),
+    prisma.generationRun.findMany({
+      include: {
+        article: {
+          select: {
+            id: true,
+            title: true,
+          },
+        },
+        opportunity: {
+          select: {
+            id: true,
+            primaryKeyword: true,
+            angle: true,
+          },
+        },
+      },
+      orderBy: { startedAt: "desc" },
+      take: 24,
+    }),
+    prisma.article.findMany({
+      where: {
+        OR: [
+          {
+            featuredImageState: {
+              in: [
+                ImageOperationState.GENERATING,
+                ImageOperationState.FAILED,
+                ImageOperationState.CLEANUP_WARNING,
+              ],
+            },
+          },
+          {
+            bodyImagesState: {
+              in: [
+                ImageOperationState.GENERATING,
+                ImageOperationState.FAILED,
+                ImageOperationState.CLEANUP_WARNING,
+              ],
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        title: true,
+        featuredImageState: true,
+        featuredImageErrorCode: true,
+        featuredImageLastAttemptAt: true,
+        bodyImagesState: true,
+        bodyImagesErrorCode: true,
+        bodyImagesLastAttemptAt: true,
+        updatedAt: true,
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 24,
+    }),
+  ]);
+
+  return {
+    publishAttempts,
+    syncRuns,
+    generationRuns,
+    imageOperations,
+  };
 }

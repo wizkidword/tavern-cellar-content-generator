@@ -1,8 +1,14 @@
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 
 import { isActiveAppCategory } from "@/lib/category-config";
-import { createArticle } from "@/lib/content-pipeline";
+import {
+  createArticleRecordFromPreparedDraft,
+  finishPreparedArticleDraft,
+  prepareArticleDraft,
+} from "@/lib/content-pipeline";
 import { prisma } from "@/lib/db";
+import { toAppError } from "@/lib/errors/app-error";
 import {
   buildGameOfThronesEpisodeGuideOpportunities,
   buildGameOfThronesFanoutGuidance,
@@ -34,6 +40,10 @@ import {
 } from "@/lib/featured-image";
 import { generateContentOpportunityIdeas } from "@/lib/openai";
 import { type OpenAITextModel } from "@/lib/openai-models";
+import {
+  parseWordPressCategoryIds,
+  serializeStringArray,
+} from "@/lib/serialized-values";
 import { normalizeTopicValue } from "@/lib/topic-utils";
 
 type BuildOpportunityInsightInput = {
@@ -61,6 +71,8 @@ export type CreateOpportunityInput = {
   brief: string;
 };
 
+export type OpportunityContext = Awaited<ReturnType<typeof loadOpportunityContext>>;
+
 type OpportunityGenerationLink = {
   title: string;
   url: string;
@@ -74,6 +86,7 @@ const deletableOpportunityStatuses = new Set([
   "IDEA",
   "APPROVED",
   "GENERATED",
+  "GENERATION_FAILED",
   "REJECTED",
   "ARCHIVED",
 ]);
@@ -98,23 +111,6 @@ function requireTrimmed(value: string, fieldName: string) {
   return trimmed;
 }
 
-function parseRawCategoryIds(rawCategoryIds: string) {
-  try {
-    const parsed = JSON.parse(rawCategoryIds) as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is number => typeof item === "number");
-    }
-  } catch {
-    // Older rows can be plain comma-separated strings.
-  }
-
-  return rawCategoryIds
-    .split(/[^0-9]+/)
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value));
-}
-
 function localCategoryIdsForSitePost(
   post: { primaryCategoryId: number | null; rawCategoryIds: string },
   wpCategoryMap: Map<number, number>,
@@ -125,7 +121,7 @@ function localCategoryIdsForSitePost(
     ids.add(post.primaryCategoryId);
   }
 
-  for (const wpCategoryId of parseRawCategoryIds(post.rawCategoryIds)) {
+  for (const wpCategoryId of parseWordPressCategoryIds(post.rawCategoryIds)) {
     const localId = wpCategoryMap.get(wpCategoryId);
 
     if (localId) {
@@ -215,7 +211,27 @@ export function buildOpportunityInsight(input: BuildOpportunityInsightInput): Op
 }
 
 export function canGenerateOpportunityDraft(status: string) {
-  return status === "IDEA" || status === "APPROVED";
+  return status === "APPROVED";
+}
+
+export function canTransitionOpportunityStatus(input: {
+  from: string;
+  to: MutableOpportunityStatus;
+  hasGeneratedArticle: boolean;
+}) {
+  if (input.hasGeneratedArticle) {
+    return input.to === "ARCHIVED";
+  }
+
+  const allowedTransitions: Record<string, MutableOpportunityStatus[]> = {
+    IDEA: ["APPROVED", "REJECTED", "ARCHIVED"],
+    APPROVED: ["REJECTED", "ARCHIVED"],
+    GENERATION_FAILED: ["APPROVED", "REJECTED", "ARCHIVED"],
+    REJECTED: ["APPROVED", "ARCHIVED"],
+    ARCHIVED: ["APPROVED"],
+  };
+
+  return allowedTransitions[input.from]?.includes(input.to) ?? false;
 }
 
 export function canDeleteOpportunity(status: string) {
@@ -234,6 +250,22 @@ export function getOpportunityWorkflowState(input: {
     };
   }
 
+  if (input.status === "GENERATING") {
+    return {
+      mode: "generating" as const,
+      message: "A draft is being generated. Wait for this run to finish before trying again.",
+      canGenerateDraft: false,
+    };
+  }
+
+  if (input.status === "GENERATION_FAILED") {
+    return {
+      mode: "retry_required" as const,
+      message: "The last draft attempt failed. Approve this opportunity again to retry safely.",
+      canGenerateDraft: false,
+    };
+  }
+
   if (canGenerateOpportunityDraft(input.status)) {
     return {
       mode: "generate_draft" as const,
@@ -244,7 +276,7 @@ export function getOpportunityWorkflowState(input: {
 
   return {
     mode: "locked" as const,
-    message: "Change this opportunity back to idea or approved before generating a draft.",
+    message: "Approve this opportunity before generating a draft.",
     canGenerateDraft: false,
   };
 }
@@ -272,9 +304,46 @@ export async function updateOpportunityStatus(
   opportunityId: string,
   status: MutableOpportunityStatus,
 ) {
-  return prisma.contentOpportunity.update({
+  const existing = await prisma.contentOpportunity.findUnique({
     where: { id: opportunityId },
-    data: { status },
+    select: {
+      status: true,
+      generatedArticleId: true,
+    },
+  });
+
+  if (!existing) {
+    throw new Error("Opportunity not found.");
+  }
+
+  if (
+    !canTransitionOpportunityStatus({
+      from: existing.status,
+      to: status,
+      hasGeneratedArticle: Boolean(existing.generatedArticleId),
+    })
+  ) {
+    throw new Error(`This opportunity cannot move from ${existing.status.toLowerCase()} to ${status.toLowerCase()}.`);
+  }
+
+  const updated = await prisma.contentOpportunity.updateMany({
+    where: {
+      id: opportunityId,
+      status: existing.status,
+      generatedArticleId: existing.generatedArticleId,
+    },
+    data: {
+      status,
+      generationErrorCode: status === "APPROVED" ? null : undefined,
+    },
+  });
+
+  if (updated.count !== 1) {
+    throw new Error("This opportunity changed before its workflow update could be saved.");
+  }
+
+  return prisma.contentOpportunity.findUniqueOrThrow({
+    where: { id: opportunityId },
     include: opportunityInclude,
   });
 }
@@ -320,13 +389,8 @@ async function findExistingOpportunity(input: {
   });
 }
 
-export async function createOpportunityFromInput(input: CreateOpportunityInput) {
-  const categoryId = Number(input.categoryId);
-  const primaryKeyword = requireTrimmed(input.primaryKeyword, "Primary keyword");
-  const angle = requireTrimmed(input.angle, "Angle");
-  const brief = requireTrimmed(input.brief, "Brief");
-  const normalizedKeyword = normalizeTopicValue(primaryKeyword);
-  const normalizedAngle = normalizeTopicValue(angle);
+export async function loadOpportunityContext(categoryIdInput: number) {
+  const categoryId = Number(categoryIdInput);
 
   if (!Number.isInteger(categoryId) || categoryId <= 0) {
     throw new Error("Pick a valid category before creating an opportunity.");
@@ -375,6 +439,32 @@ export async function createOpportunityFromInput(input: CreateOpportunityInput) 
   if (!category || !isActiveAppCategory(category)) {
     throw new Error("Pick one of the active Foundry categories before creating an opportunity.");
   }
+
+  return { category, categories, articles, sitePosts };
+}
+
+export async function createOpportunityFromInput(
+  input: CreateOpportunityInput,
+  preloadedContext?: OpportunityContext,
+) {
+  const categoryId = Number(input.categoryId);
+  const primaryKeyword = requireTrimmed(input.primaryKeyword, "Primary keyword");
+  const angle = requireTrimmed(input.angle, "Angle");
+  const brief = requireTrimmed(input.brief, "Brief");
+  const normalizedKeyword = normalizeTopicValue(primaryKeyword);
+  const normalizedAngle = normalizeTopicValue(angle);
+
+  if (!Number.isInteger(categoryId) || categoryId <= 0) {
+    throw new Error("Pick a valid category before creating an opportunity.");
+  }
+
+  const context = preloadedContext ?? await loadOpportunityContext(categoryId);
+
+  if (context.category.id !== categoryId) {
+    throw new Error("The supplied opportunity context does not match the requested category.");
+  }
+
+  const { category, categories, articles, sitePosts } = context;
 
   const wpCategoryMap = new Map(categories.map((item) => [item.wpCategoryId, item.id]));
   const coverageLane = buildCoverageMap({
@@ -457,7 +547,7 @@ export async function createOpportunityFromInput(input: CreateOpportunityInput) 
           publishabilityScore: insight.score.publishabilityScore,
           categoryBalanceScore: insight.score.categoryBalanceScore,
           overallScore: insight.score.overallScore,
-          scoreReasons: JSON.stringify(insight.score.reasons),
+          scoreReasons: serializeStringArray(insight.score.reasons),
           duplicateRiskLabel: insight.duplicateAssessment.label,
         },
       });
@@ -483,7 +573,7 @@ export async function createOpportunityFromInput(input: CreateOpportunityInput) 
             title: match.title,
             status: match.status,
             similarity: match.similarity,
-            reason: match.reason,
+            reason: `${match.reason} ${match.explanation}`,
           })),
         });
       }
@@ -517,44 +607,8 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
     throw new Error("Pick a valid category before generating opportunity ideas.");
   }
 
-  const [category, categories, articles, sitePosts, existingOpportunities] = await Promise.all([
-    prisma.category.findUnique({
-      where: { id: categoryId },
-    }),
-    prisma.category.findMany(),
-    prisma.article.findMany({
-      select: {
-        id: true,
-        categoryId: true,
-        title: true,
-        angle: true,
-        status: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "desc" },
-      take: 300,
-    }),
-    prisma.sitePost.findMany({
-      select: {
-        id: true,
-        title: true,
-        slug: true,
-        link: true,
-        excerpt: true,
-        wpStatus: true,
-        publishedAt: true,
-        primaryCategoryId: true,
-        rawCategoryIds: true,
-        lastSyncedAt: true,
-        primaryCategory: {
-          select: {
-            name: true,
-          },
-        },
-      },
-      orderBy: { publishedAt: "desc" },
-      take: 500,
-    }),
+  const [context, existingOpportunities] = await Promise.all([
+    loadOpportunityContext(categoryId),
     prisma.contentOpportunity.findMany({
       select: {
         primaryKeyword: true,
@@ -566,10 +620,7 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
       take: 500,
     }),
   ]);
-
-  if (!category || !isActiveAppCategory(category)) {
-    throw new Error("Pick one of the active Foundry categories before generating opportunity ideas.");
-  }
+  const { category, categories, articles, sitePosts } = context;
 
   const wpCategoryMap = new Map(categories.map((item) => [item.wpCategoryId, item.id]));
   const coverageLane = buildCoverageMap({
@@ -646,18 +697,15 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
     : [];
 
   if (gameOfThronesEpisodeGuideIdeas.length > 0) {
-    const opportunities = [];
-
-    for (const idea of gameOfThronesEpisodeGuideIdeas) {
-      opportunities.push(
-        await createOpportunityFromInput({
-          categoryId: category.id,
-          primaryKeyword: idea.primaryKeyword,
-          angle: idea.angle,
-          brief: idea.brief,
-        }),
-      );
-    }
+    const opportunities = await persistOpportunities(
+      gameOfThronesEpisodeGuideIdeas.map((idea) => ({
+        categoryId: category.id,
+        primaryKeyword: idea.primaryKeyword,
+        angle: idea.angle,
+        brief: idea.brief,
+      })),
+      context,
+    );
 
     return {
       opportunities,
@@ -681,23 +729,33 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
     }),
     internalLinkCandidates: realLinkCandidates,
   });
-  const opportunities = [];
-
-  for (const idea of ideas.opportunities) {
-    opportunities.push(
-      await createOpportunityFromInput({
-        categoryId: category.id,
-        primaryKeyword: idea.primaryKeyword,
-        angle: idea.angle,
-        brief: idea.brief,
-      }),
-    );
-  }
+  const opportunities = await persistOpportunities(
+    ideas.opportunities.map((idea) => ({
+      categoryId: category.id,
+      primaryKeyword: idea.primaryKeyword,
+      angle: idea.angle,
+      brief: idea.brief,
+    })),
+    context,
+  );
 
   return {
     opportunities,
     textModel: ideas.textModel,
   };
+}
+
+export async function persistOpportunities(
+  inputs: CreateOpportunityInput[],
+  context: OpportunityContext,
+) {
+  const opportunities = [];
+
+  for (const input of inputs) {
+    opportunities.push(await createOpportunityFromInput(input, context));
+  }
+
+  return opportunities;
 }
 
 export async function createArticleFromOpportunity(
@@ -727,39 +785,113 @@ export async function createArticleFromOpportunity(
     throw new Error("Opportunity not found.");
   }
 
-  if (!canGenerateOpportunityDraft(opportunity.status)) {
-    throw new Error("Only idea or approved opportunities can generate a new draft.");
+  if (opportunity.generatedArticleId) {
+    const existingArticle = await prisma.article.findUnique({
+      where: { id: opportunity.generatedArticleId },
+    });
+
+    if (existingArticle) {
+      return existingArticle;
+    }
+
+    throw new Error("This opportunity already has a saved draft link that needs operator review.");
   }
 
-  const article = await createArticle({
-    categoryId: opportunity.categoryId,
-    primaryKeyword: opportunity.primaryKeyword,
-    angle: opportunity.angle,
-    notes: buildOpportunityGenerationNotes({
-      brief: opportunity.brief,
-      overallScore: opportunity.overallScore,
-      internalLinks: opportunity.internalLinks.map((link) => ({
-        title: link.sitePost.title,
-        url: link.sitePost.link ?? `/${link.sitePost.slug}`,
-        reason: link.reason,
-        confidence: link.confidence,
-      })),
-    }),
-    generateImage: options.generateImage,
-    textModel: options.textModel,
-    imageProvider: options.imageProvider,
-    falImageModel: options.falImageModel,
-    openAiImageModel: options.openAiImageModel,
-    bodyImageCount: options.bodyImageCount,
-  });
-
-  await prisma.contentOpportunity.update({
-    where: { id: opportunity.id },
+  const attemptKey = randomUUID();
+  const claimed = await prisma.contentOpportunity.updateMany({
+    where: {
+      id: opportunity.id,
+      status: "APPROVED",
+      generatedArticleId: null,
+    },
     data: {
-      status: "GENERATED",
-      generatedArticleId: article.id,
+      status: "GENERATING",
+      generationAttemptKey: attemptKey,
+      generationErrorCode: null,
+      generationLastAttemptAt: new Date(),
     },
   });
 
-  return article;
+  if (claimed.count !== 1) {
+    throw new Error("This opportunity is not approved or is already being generated.");
+  }
+
+  try {
+    // AI work happens outside the database transaction. Only the durable draft
+    // record and its opportunity link are committed together.
+    const prepared = await prepareArticleDraft({
+      categoryId: opportunity.categoryId,
+      primaryKeyword: opportunity.primaryKeyword,
+      angle: opportunity.angle,
+      notes: buildOpportunityGenerationNotes({
+        brief: opportunity.brief,
+        overallScore: opportunity.overallScore,
+        internalLinks: opportunity.internalLinks.map((link) => ({
+          title: link.sitePost.title,
+          url: link.sitePost.link ?? `/${link.sitePost.slug}`,
+          reason: link.reason,
+          confidence: link.confidence,
+        })),
+      }),
+      generateImage: options.generateImage,
+      textModel: options.textModel,
+      imageProvider: options.imageProvider,
+      falImageModel: options.falImageModel,
+      openAiImageModel: options.openAiImageModel,
+      bodyImageCount: options.bodyImageCount,
+      generationTelemetry: { opportunityId: opportunity.id },
+    });
+    const article = await prisma.$transaction(async (transaction) => {
+      const stillClaimed = await transaction.contentOpportunity.count({
+        where: {
+          id: opportunity.id,
+          status: "GENERATING",
+          generationAttemptKey: attemptKey,
+          generatedArticleId: null,
+        },
+      });
+
+      if (stillClaimed !== 1) {
+        throw new Error("The opportunity generation claim was lost before the draft could be saved.");
+      }
+
+      const savedArticle = await createArticleRecordFromPreparedDraft(transaction, prepared);
+      const completed = await transaction.contentOpportunity.updateMany({
+        where: {
+          id: opportunity.id,
+          status: "GENERATING",
+          generationAttemptKey: attemptKey,
+          generatedArticleId: null,
+        },
+        data: {
+          status: "GENERATED",
+          generatedArticleId: savedArticle.id,
+          generationErrorCode: null,
+        },
+      });
+
+      if (completed.count !== 1) {
+        throw new Error("The generated draft could not be linked to its opportunity.");
+      }
+
+      return savedArticle;
+    });
+
+    return finishPreparedArticleDraft(article, prepared);
+  } catch (error) {
+    await prisma.contentOpportunity.updateMany({
+      where: {
+        id: opportunity.id,
+        status: "GENERATING",
+        generationAttemptKey: attemptKey,
+      },
+      data: {
+        status: "GENERATION_FAILED",
+        generationErrorCode: toAppError(error).code,
+        generationLastAttemptAt: new Date(),
+      },
+    });
+
+    throw error;
+  }
 }

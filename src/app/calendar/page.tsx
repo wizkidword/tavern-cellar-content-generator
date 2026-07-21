@@ -3,6 +3,9 @@ import Link from "next/link";
 
 import { FoundryNav } from "@/app/foundry-nav";
 import { getCalendarData } from "@/lib/intelligence/read-models";
+import { requireOperatorPage } from "@/lib/operator-auth";
+
+export const dynamic = "force-dynamic";
 
 function formatSchedule(value: Date | null, localValue: string | null) {
   if (localValue) {
@@ -17,6 +20,7 @@ function formatSchedule(value: Date | null, localValue: string | null) {
 }
 
 export default async function CalendarPage() {
+  await requireOperatorPage();
   const articles = await getCalendarData();
 
   return (

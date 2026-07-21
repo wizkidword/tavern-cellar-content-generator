@@ -7,11 +7,14 @@ import {
   createArticle,
   generateArticleModelComparison,
   publishArticle,
+  reconcileArticlePublish,
   regenerateArticleBodyImages,
   regenerateFeaturedImage,
   saveArticleReview,
   scheduleArticleRandomly,
 } from "@/lib/content-pipeline";
+import { createArticleClaim, updateArticleClaim } from "@/lib/article-claims";
+import { insertArticleInternalLink } from "@/lib/article-internal-links";
 import {
   createArticleFromOpportunity,
   createOpportunityFromInput,
@@ -20,40 +23,69 @@ import {
   updateOpportunityStatus,
 } from "@/lib/intelligence/opportunities";
 import { upsertTopicClustersFromCurrentCatalog } from "@/lib/intelligence/clusters";
-import { assertOperatorAccessFromHeaders } from "@/lib/operator-auth";
 import {
-  resolveFalImageModel,
-  resolveFeaturedImageProvider,
-  resolveOpenAIImageModel,
-} from "@/lib/featured-image";
-import { resolveOpenAITextModel } from "@/lib/openai-models";
+  assertOperatorActionAccess,
+  assertProviderActionAllowed,
+} from "@/lib/operator-auth";
+import { AppError, reportAppError } from "@/lib/errors/app-error";
+import {
+  articleGenerationSettingsSchema,
+  articleClaimCreateFormSchema,
+  articleClaimUpdateFormSchema,
+  articleReviewFormSchema,
+  categoryOnlyFormSchema,
+  comparisonFormSchema,
+  generateArticleFormSchema,
+  opportunityFormSchema,
+  parseFormData,
+  wordpressCategoryFormSchema,
+} from "@/lib/validation/schemas";
 import { createWordPressCategoryAndSync, syncWordPressCatalog } from "@/lib/wordpress";
 
-function buildRedirect(pathname: string, params: Record<string, string>) {
-  const searchParams = new URLSearchParams(params);
+function buildRedirect(pathname: string, params: Record<string, string | AppError>) {
+  const searchParams = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value instanceof AppError) {
+      searchParams.set(key, value.code);
+      searchParams.set("ref", value.correlationId);
+      continue;
+    }
+
+    searchParams.set(key, value);
+  }
+
   return `${pathname}?${searchParams.toString()}`;
 }
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Something went wrong.";
+  return reportAppError(error, "server_action");
 }
 
-export async function syncWordPressCatalogAction() {
-  let targetPath = "/";
+async function runWordPressCatalogSync(
+  mode: "FULL_PRIVATE" | "PUBLIC_ONLY",
+  targetPage: "/" | "/operations",
+) {
+  let targetPath: string = targetPage;
 
   try {
-    await assertOperatorAccessFromHeaders();
-    const result = await syncWordPressCatalog();
+    await assertOperatorActionAccess();
+    const result = await syncWordPressCatalog({ mode });
     revalidatePath("/");
-    targetPath = buildRedirect("/", {
-      message: `Synced ${result.categoryCount} categories and ${result.postCount} live posts from WordPress.`,
+    revalidatePath("/intelligence");
+    revalidatePath("/opportunities");
+    revalidatePath("/operations");
+    targetPath = buildRedirect(targetPage, {
+      message:
+        mode === "FULL_PRIVATE"
+          ? `Completed a full private sync: ${result.categoryCount} categories and ${result.postCount} posts.`
+          : `Completed a public-only sync: ${result.categoryCount} categories and ${result.postCount} visible posts. Private coverage may be missing.`,
     });
   } catch (error) {
-    targetPath = buildRedirect("/", {
+    revalidatePath("/");
+    revalidatePath("/intelligence");
+    revalidatePath("/operations");
+    targetPath = buildRedirect(targetPage, {
       error: getErrorMessage(error),
     });
   }
@@ -61,11 +93,27 @@ export async function syncWordPressCatalogAction() {
   redirect(targetPath);
 }
 
+export async function syncWordPressCatalogAction(
+  mode: "FULL_PRIVATE" | "PUBLIC_ONLY" = "FULL_PRIVATE",
+  _formData?: FormData,
+) {
+  void _formData;
+  await runWordPressCatalogSync(mode, "/");
+}
+
+export async function syncWordPressCatalogFromOperationsAction(
+  mode: "FULL_PRIVATE" | "PUBLIC_ONLY",
+  _formData?: FormData,
+) {
+  void _formData;
+  await runWordPressCatalogSync(mode, "/operations");
+}
+
 export async function refreshTopicClustersAction() {
   let targetPath = "/intelligence";
 
   try {
-    await assertOperatorAccessFromHeaders();
+    await assertOperatorActionAccess();
     const clusters = await upsertTopicClustersFromCurrentCatalog();
     revalidatePath("/intelligence");
     revalidatePath("/opportunities");
@@ -85,19 +133,10 @@ export async function generateArticleAction(formData: FormData) {
   let targetPath = "/";
 
   try {
-    await assertOperatorAccessFromHeaders();
-    const article = await createArticle({
-      categoryId: Number(String(formData.get("categoryId") ?? "0")),
-      primaryKeyword: String(formData.get("primaryKeyword") ?? ""),
-      angle: String(formData.get("angle") ?? ""),
-      notes: String(formData.get("notes") ?? ""),
-      generateImage: formData.get("generateImage") === "on",
-      textModel: resolveOpenAITextModel(formData.get("textModel")),
-      imageProvider: resolveFeaturedImageProvider(formData.get("imageProvider")),
-      falImageModel: resolveFalImageModel(formData.get("falImageModel")),
-      openAiImageModel: resolveOpenAIImageModel(formData.get("openAiImageModel")),
-      bodyImageCount: Number(String(formData.get("bodyImageCount") ?? "0")),
-    });
+    const session = await assertOperatorActionAccess();
+    const input = parseFormData(generateArticleFormSchema, formData);
+    assertProviderActionAllowed(session.sid);
+    const article = await createArticle(input);
 
     revalidatePath("/");
     revalidatePath(`/articles/${article.id}`);
@@ -117,13 +156,10 @@ export async function createOpportunityAction(formData: FormData) {
   let targetPath = "/opportunities";
 
   try {
-    await assertOperatorAccessFromHeaders();
-    const opportunity = await createOpportunityFromInput({
-      categoryId: Number(String(formData.get("categoryId") ?? "0")),
-      primaryKeyword: String(formData.get("primaryKeyword") ?? ""),
-      angle: String(formData.get("angle") ?? ""),
-      brief: String(formData.get("brief") ?? ""),
-    });
+    await assertOperatorActionAccess();
+    const opportunity = await createOpportunityFromInput(
+      parseFormData(opportunityFormSchema, formData),
+    );
 
     revalidatePath("/intelligence");
     revalidatePath("/opportunities");
@@ -144,8 +180,9 @@ export async function generateOpportunityIdeasAction(formData: FormData) {
   let targetPath = "/opportunities";
 
   try {
-    await assertOperatorAccessFromHeaders();
-    const categoryId = Number(String(formData.get("categoryId") ?? "0"));
+    const session = await assertOperatorActionAccess();
+    const { categoryId } = parseFormData(categoryOnlyFormSchema, formData);
+    assertProviderActionAllowed(session.sid);
     const result = await generateOpportunitiesForCategory(categoryId);
     revalidatePath("/intelligence");
     revalidatePath("/opportunities");
@@ -166,12 +203,17 @@ export async function createWordPressCategoryAction(formData: FormData) {
   let targetPath = "/opportunities";
 
   try {
-    await assertOperatorAccessFromHeaders();
-    const category = await createWordPressCategoryAndSync({
-      name: String(formData.get("categoryName") ?? ""),
-      slug: String(formData.get("categorySlug") ?? ""),
-      description: String(formData.get("categoryDescription") ?? ""),
-    });
+    await assertOperatorActionAccess();
+    const category = await createWordPressCategoryAndSync(
+      (() => {
+        const input = parseFormData(wordpressCategoryFormSchema, formData);
+        return {
+          name: input.categoryName,
+          slug: input.categorySlug,
+          description: input.categoryDescription,
+        };
+      })(),
+    );
     revalidatePath("/");
     revalidatePath("/intelligence");
     revalidatePath("/opportunities");
@@ -192,7 +234,7 @@ export async function deleteOpportunityAction(opportunityId: string) {
   let targetPath = "/opportunities";
 
   try {
-    await assertOperatorAccessFromHeaders();
+    await assertOperatorActionAccess();
     const opportunity = await deleteOpportunity(opportunityId);
     revalidatePath("/intelligence");
     revalidatePath("/opportunities");
@@ -222,7 +264,7 @@ async function setOpportunityStatusAction(
   let targetPath = `/opportunities/${opportunityId}`;
 
   try {
-    await assertOperatorAccessFromHeaders();
+    await assertOperatorActionAccess();
     await updateOpportunityStatus(opportunityId, status);
     revalidatePath("/opportunities");
     revalidatePath(`/opportunities/${opportunityId}`);
@@ -266,15 +308,13 @@ export async function generateOpportunityDraftAction(opportunityId: string, form
   let targetPath = `/opportunities/${opportunityId}`;
 
   try {
-    await assertOperatorAccessFromHeaders();
-    const article = await createArticleFromOpportunity(opportunityId, {
-      generateImage: formData.get("generateImage") === "on",
-      textModel: resolveOpenAITextModel(formData.get("textModel")),
-      imageProvider: resolveFeaturedImageProvider(formData.get("imageProvider")),
-      falImageModel: resolveFalImageModel(formData.get("falImageModel")),
-      openAiImageModel: resolveOpenAIImageModel(formData.get("openAiImageModel")),
-      bodyImageCount: Number(String(formData.get("bodyImageCount") ?? "0")),
-    });
+    const session = await assertOperatorActionAccess();
+    const input = parseFormData(articleGenerationSettingsSchema, formData);
+    assertProviderActionAllowed(session.sid);
+    const article = await createArticleFromOpportunity(
+      opportunityId,
+      input,
+    );
     revalidatePath("/opportunities");
     revalidatePath(`/opportunities/${opportunityId}`);
     revalidatePath(`/articles/${article.id}`);
@@ -295,7 +335,7 @@ export async function saveArticleReviewAction(articleId: string, formData: FormD
   let targetPath = `/articles/${articleId}`;
 
   try {
-    await assertOperatorAccessFromHeaders();
+    await assertOperatorActionAccess();
     await saveArticleReview(articleId, formData);
     revalidatePath(`/articles/${articleId}`);
     revalidatePath("/");
@@ -311,14 +351,80 @@ export async function saveArticleReviewAction(articleId: string, formData: FormD
   redirect(targetPath);
 }
 
+export async function createArticleClaimAction(articleId: string, formData: FormData) {
+  const targetPage = `/articles/${articleId}`;
+  let targetPath = targetPage;
+
+  try {
+    await assertOperatorActionAccess();
+    const input = parseFormData(articleClaimCreateFormSchema, formData);
+    await createArticleClaim(articleId, input);
+    revalidatePath(targetPage);
+    targetPath = buildRedirect(targetPage, { message: "Claim added for verification." });
+  } catch (error) {
+    targetPath = buildRedirect(targetPage, { error: getErrorMessage(error) });
+  }
+
+  redirect(targetPath);
+}
+
+export async function saveArticleClaimAction(
+  articleId: string,
+  claimId: string,
+  formData: FormData,
+) {
+  const targetPage = `/articles/${articleId}`;
+  let targetPath = targetPage;
+
+  try {
+    await assertOperatorActionAccess();
+    const input = parseFormData(articleClaimUpdateFormSchema, formData);
+    await updateArticleClaim(articleId, claimId, input);
+    revalidatePath(targetPage);
+    targetPath = buildRedirect(targetPage, { message: "Claim saved." });
+  } catch (error) {
+    targetPath = buildRedirect(targetPage, { error: getErrorMessage(error) });
+  }
+
+  redirect(targetPath);
+}
+
+export async function insertArticleInternalLinkAction(
+  articleId: string,
+  targetKey: string,
+  _formData?: FormData,
+) {
+  void _formData;
+  const targetPage = `/articles/${articleId}`;
+  let targetPath = targetPage;
+
+  try {
+    await assertOperatorActionAccess();
+    const article = await insertArticleInternalLink(articleId, targetKey);
+    revalidatePath(targetPage);
+    revalidatePath("/");
+    targetPath = buildRedirect(targetPage, {
+      message: `Inserted an internal link to ${article.internalLinks.split("\n").at(-1) ?? "the selected target"}.`,
+    });
+  } catch (error) {
+    targetPath = buildRedirect(targetPage, { error: getErrorMessage(error) });
+  }
+
+  redirect(targetPath);
+}
+
 export async function generateArticleComparisonAction(articleId: string, formData?: FormData) {
   let targetPath = `/articles/${articleId}/compare`;
 
   try {
-    await assertOperatorAccessFromHeaders();
+    const session = await assertOperatorActionAccess();
+    const comparisonModel = formData
+      ? parseFormData(comparisonFormSchema, formData).comparisonModel
+      : undefined;
+    assertProviderActionAllowed(session.sid);
     const comparison = await generateArticleModelComparison(
       articleId,
-      formData?.get("comparisonModel"),
+      comparisonModel,
     );
     revalidatePath(`/articles/${articleId}`);
     revalidatePath(`/articles/${articleId}/compare`);
@@ -338,7 +444,9 @@ export async function regenerateFeaturedImageAction(articleId: string, formData:
   let targetPath = `/articles/${articleId}`;
 
   try {
-    await assertOperatorAccessFromHeaders();
+    const session = await assertOperatorActionAccess();
+    parseFormData(articleReviewFormSchema, formData);
+    assertProviderActionAllowed(session.sid);
     await regenerateFeaturedImage(articleId, formData);
     revalidatePath(`/articles/${articleId}`);
     targetPath = buildRedirect(`/articles/${articleId}`, {
@@ -357,7 +465,9 @@ export async function regenerateArticleBodyImagesAction(articleId: string, formD
   let targetPath = `/articles/${articleId}`;
 
   try {
-    await assertOperatorAccessFromHeaders();
+    const session = await assertOperatorActionAccess();
+    parseFormData(articleReviewFormSchema, formData);
+    assertProviderActionAllowed(session.sid);
     const article = await regenerateArticleBodyImages(articleId, formData);
     revalidatePath(`/articles/${article.id}`);
     targetPath = buildRedirect(`/articles/${article.id}`, {
@@ -376,7 +486,7 @@ export async function sendWordPressDraftAction(articleId: string, formData: Form
   let targetPath = `/articles/${articleId}`;
 
   try {
-    await assertOperatorAccessFromHeaders();
+    await assertOperatorActionAccess();
     const article = await publishArticle(articleId, formData, "draft");
     revalidatePath(`/articles/${articleId}`);
     revalidatePath("/");
@@ -399,7 +509,7 @@ export async function publishNowAction(articleId: string, formData: FormData) {
   let targetPath = `/articles/${articleId}`;
 
   try {
-    await assertOperatorAccessFromHeaders();
+    await assertOperatorActionAccess();
     const article = await publishArticle(articleId, formData, "publish");
     revalidatePath(`/articles/${articleId}`);
     revalidatePath("/");
@@ -418,11 +528,48 @@ export async function publishNowAction(articleId: string, formData: FormData) {
   redirect(targetPath);
 }
 
+async function runArticlePublishReconciliation(
+  articleId: string,
+  targetPage: string,
+) {
+  let targetPath: string = targetPage;
+
+  try {
+    await assertOperatorActionAccess();
+    await reconcileArticlePublish(articleId);
+    revalidatePath(`/articles/${articleId}`);
+    revalidatePath("/");
+    revalidatePath("/operations");
+    targetPath = buildRedirect(targetPage, {
+      message: "Publish recovery completed. The existing WordPress post was reconciled before retrying.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(targetPage, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function reconcileArticlePublishAction(articleId: string, _formData?: FormData) {
+  void _formData;
+  await runArticlePublishReconciliation(articleId, `/articles/${articleId}`);
+}
+
+export async function reconcileArticlePublishFromOperationsAction(
+  articleId: string,
+  _formData?: FormData,
+) {
+  void _formData;
+  await runArticlePublishReconciliation(articleId, "/operations");
+}
+
 export async function scheduleArticleAction(articleId: string, formData: FormData) {
   let targetPath = `/articles/${articleId}`;
 
   try {
-    await assertOperatorAccessFromHeaders();
+    await assertOperatorActionAccess();
     const article = await publishArticle(articleId, formData, "future");
     revalidatePath(`/articles/${articleId}`);
     revalidatePath("/");
@@ -446,7 +593,7 @@ export async function randomScheduleArticleAction(articleId: string, formData: F
   let targetPath = `/articles/${articleId}`;
 
   try {
-    await assertOperatorAccessFromHeaders();
+    await assertOperatorActionAccess();
     const article = await scheduleArticleRandomly(articleId, formData);
     const scheduleLabel = article.scheduledForLocal?.replace("T", " ") ?? "the selected random slot";
     revalidatePath(`/articles/${articleId}`);

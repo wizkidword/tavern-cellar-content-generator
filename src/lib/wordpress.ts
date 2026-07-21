@@ -3,13 +3,18 @@ import {
   type ArticleBodyImage,
   type Category,
   type Prisma,
+  WordPressSyncMode,
+  WordPressSyncState,
 } from "@prisma/client";
-import { marked } from "marked";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { prisma } from "@/lib/db";
+import { AppError, toAppError } from "@/lib/errors/app-error";
 import { getServerEnv, requireWordPressAuthEnv } from "@/lib/env";
+import { fetchWithPolicy } from "@/lib/http/fetch-policy";
+import { renderSanitizedArticleHtml } from "@/lib/rendering/sanitize-html";
+import { serializeWordPressCategoryIds } from "@/lib/serialized-values";
 import { isAllowedAppCategorySlug } from "@/lib/category-config";
 import {
   buildCanonicalTopicKey,
@@ -38,10 +43,33 @@ type WordPressPostRecord = {
   excerpt: { rendered: string };
 };
 
+export type WordPressSyncModeInput = "FULL_PRIVATE" | "PUBLIC_ONLY";
+
+type WordPressSiteSettings = {
+  timezone_string?: string;
+  gmt_offset?: number;
+};
+
+function formatWordPressGmtOffset(offset: number) {
+  const sign = offset >= 0 ? "+" : "-";
+  const absoluteMinutes = Math.round(Math.abs(offset) * 60);
+  const hours = Math.floor(absoluteMinutes / 60);
+  const minutes = absoluteMinutes % 60;
+
+  return `UTC${sign}${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
 type WordPressPostEditRecord = {
   id: number;
   meta?: Record<string, unknown>;
   yoast_head?: string;
+};
+
+type WordPressPublishRecord = {
+  id: number;
+  status: string;
+  date_gmt?: string;
+  link?: string;
 };
 
 type WordPressMediaRecord = {
@@ -71,6 +99,11 @@ function wordpressApiUrl(pathname: string) {
   return new URL(`/wp-json/wp/v2${pathname}`, env.WORDPRESS_URL).toString();
 }
 
+function wordpressFoundryApiUrl(pathname: string) {
+  const env = getServerEnv();
+  return new URL(`/wp-json/tavern-cellar/v1${pathname}`, env.WORDPRESS_URL).toString();
+}
+
 function stripHtml(value: string) {
   return value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -90,29 +123,6 @@ function clampText(value: string, maxLength: number) {
   }
 
   return normalized.slice(0, maxLength).trim();
-}
-
-function summarizeWordPressErrorBody(rawBody: string, contentType: string | null) {
-  const looksLikeHtml =
-    contentType?.toLowerCase().includes("text/html") ||
-    /<\s*!doctype\s+html|<\s*html[\s>]/i.test(rawBody);
-
-  if (looksLikeHtml) {
-    return "WordPress returned an HTML error page instead of a compact REST API error. Check WordPress hosting, firewall, or security plugin rules for the REST media endpoint.";
-  }
-
-  const plainText = clampText(stripHtml(rawBody), 240);
-
-  return plainText || null;
-}
-
-function stripRawMarkdownHtml(value: string) {
-  return value
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<\/?[a-z][a-z0-9:-]*(?:\s+[^<>]*)?>/gi, "")
-    .trim();
 }
 
 function escapeHtmlAttribute(value: string) {
@@ -212,30 +222,73 @@ export async function buildWordPressPostContentHtml(input: {
   }>;
 }) {
   const contentWithBodyImages = replaceBodyImageMarkdownWithBlocks(
-    stripRawMarkdownHtml(input.contentMarkdown),
+    input.contentMarkdown,
     input.bodyImages ?? [],
   );
-  const htmlContent = await marked.parse(contentWithBodyImages);
+  const imageBlock = input.featuredImage?.sourceUrl.trim()
+    ? buildFeaturedImageBlockHtml(input.featuredImage)
+    : "";
+  const approvedImageUrls = [
+    input.featuredImage?.sourceUrl,
+    ...(input.bodyImages ?? []).map((image) => image.sourceUrl),
+  ].filter((url): url is string => Boolean(url?.trim()));
 
-  if (!input.featuredImage?.sourceUrl.trim()) {
-    return htmlContent;
+  return renderSanitizedArticleHtml({
+    markdown: imageBlock ? `${imageBlock}\n\n${contentWithBodyImages}` : contentWithBodyImages,
+    approvedImageUrls,
+  });
+}
+
+function buildPreflightImageHtml(input: { sourceUrl: string; altText: string }) {
+  const sourceUrl = input.sourceUrl.trim();
+
+  if (!sourceUrl) {
+    return "";
   }
 
-  const imageBlock = buildFeaturedImageBlockHtml(input.featuredImage);
+  return `<figure class="wp-block-image size-full"><img src="${escapeHtmlAttribute(
+    sourceUrl,
+  )}" alt="${escapeHtmlAttribute(input.altText.trim())}"/></figure>`;
+}
 
-  return imageBlock ? `${imageBlock}\n\n${htmlContent}` : htmlContent;
+/**
+ * Renders the saved article through the same Markdown renderer and HTML sanitizer
+ * used for publishing. Generated image paths stay local in this preflight because
+ * WordPress only assigns their final media URLs during the upload itself.
+ */
+export async function buildWordPressPreflightContentHtml(input: {
+  contentMarkdown: string;
+  featuredImage: {
+    publicPath: string;
+    altText: string;
+  } | null;
+  bodyImages?: Array<{
+    publicPath: string;
+    altText: string;
+  }>;
+}) {
+  const imageBlock = input.featuredImage?.publicPath.trim()
+    ? buildPreflightImageHtml({
+        sourceUrl: input.featuredImage.publicPath,
+        altText: input.featuredImage.altText,
+      })
+    : "";
+  const approvedImageUrls = [
+    input.featuredImage?.publicPath,
+    ...(input.bodyImages ?? []).map((image) => image.publicPath),
+  ].filter((url): url is string => Boolean(url?.trim()));
+
+  return renderSanitizedArticleHtml({
+    markdown: imageBlock ? `${imageBlock}\n\n${input.contentMarkdown}` : input.contentMarkdown,
+    approvedImageUrls,
+  });
 }
 
 type WordPressErrorPayload = {
   code?: string;
-  message?: string;
-  data?: {
-    status?: number;
-  };
 };
 
-async function buildWordPressError(prefix: string, response: Response) {
-  const fallback = `${prefix}: ${response.status} ${response.statusText}`;
+async function buildWordPressError(response: Response) {
   const rawBody = await response.text();
 
   let payload: WordPressErrorPayload | null = null;
@@ -247,50 +300,129 @@ async function buildWordPressError(prefix: string, response: Response) {
   }
 
   const code = payload?.code;
-  const message = payload?.message;
-
   if (code === "rest_not_logged_in") {
-    return new Error(
-      `${prefix}: WordPress did not accept the current credentials. Check WORDPRESS_USERNAME and WORDPRESS_APP_PASSWORD, then create a fresh application password if needed.`,
-    );
+    return new AppError("WP_AUTH_FAILED");
   }
 
-  if (code === "rest_cannot_create") {
-    return new Error(
-      `${prefix}: WordPress authenticated the request, but this user cannot create content or upload media. Use an Administrator, Editor, or Author account with post and media permissions. Original message: ${message ?? "rest_cannot_create"}`,
-    );
-  }
-
-  if (message) {
-    return new Error(`${prefix}: ${response.status} ${message}`);
-  }
-
-  if (rawBody) {
-    const bodySummary = summarizeWordPressErrorBody(rawBody, response.headers.get("content-type"));
-
-    return new Error(bodySummary ? `${fallback}. ${bodySummary}` : fallback);
-  }
-
-  return new Error(fallback);
+  return new AppError("WP_RESPONSE_INVALID", { retryable: response.status >= 500 });
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit) {
-  const response = await fetch(url, {
-    ...init,
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new Error(`WordPress request failed: ${response.status} ${response.statusText}`);
-  }
-
-  return response.json() as Promise<T>;
-}
-
-export async function fetchWordPressCategories() {
-  return fetchJson<WordPressCategoryRecord[]>(
-    wordpressApiUrl("/categories?per_page=100&_fields=id,count,description,name,slug"),
+async function fetchWordPressRead(url: string, init: RequestInit = {}) {
+  return fetchWithPolicy(
+    url,
+    { ...init, cache: "no-store" },
+    { service: "wordpress", timeoutMs: 12_000, retries: 2 },
   );
+}
+
+async function fetchWordPressWrite(url: string, init: RequestInit) {
+  return fetchWithPolicy(
+    url,
+    { ...init, cache: "no-store" },
+    { service: "wordpress", timeoutMs: 20_000, retries: 0, uncertainWrite: true },
+  );
+}
+
+function readWordPressTotalPages(response: Response) {
+  const totalPages = Number(response.headers.get("X-WP-TotalPages") ?? "1");
+
+  if (!Number.isInteger(totalPages) || totalPages < 1 || totalPages > 10_000) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+
+  return totalPages;
+}
+
+function assertWordPressCategoryRecords(value: unknown): asserts value is WordPressCategoryRecord[] {
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (category) =>
+        !category ||
+        typeof category !== "object" ||
+        !Number.isInteger((category as WordPressCategoryRecord).id) ||
+        (category as WordPressCategoryRecord).id < 1 ||
+        !Number.isInteger((category as WordPressCategoryRecord).count) ||
+        (category as WordPressCategoryRecord).count < 0 ||
+        typeof (category as WordPressCategoryRecord).description !== "string" ||
+        typeof (category as WordPressCategoryRecord).name !== "string" ||
+        typeof (category as WordPressCategoryRecord).slug !== "string",
+    )
+  ) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+}
+
+function assertWordPressPostRecords(value: unknown): asserts value is WordPressPostRecord[] {
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (post) =>
+        !post ||
+        typeof post !== "object" ||
+        !Number.isInteger((post as WordPressPostRecord).id) ||
+        (post as WordPressPostRecord).id < 1 ||
+        typeof (post as WordPressPostRecord).date !== "string" ||
+        typeof (post as WordPressPostRecord).slug !== "string" ||
+        typeof (post as WordPressPostRecord).link !== "string" ||
+        !Array.isArray((post as WordPressPostRecord).categories) ||
+        (post as WordPressPostRecord).categories.some((categoryId) => !Number.isInteger(categoryId)) ||
+        typeof (post as WordPressPostRecord).title?.rendered !== "string" ||
+        typeof (post as WordPressPostRecord).excerpt?.rendered !== "string",
+    )
+  ) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+}
+
+async function fetchAllWordPressCategories(input: {
+  headers?: HeadersInit;
+}) {
+  const categories: WordPressCategoryRecord[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages) {
+    const response = await fetchWordPressRead(
+      wordpressApiUrl(`/categories?per_page=100&page=${page}&_fields=id,count,description,name,slug`),
+      { headers: input.headers },
+    );
+
+    if (!response.ok) {
+      throw await buildWordPressError(response);
+    }
+
+    const reportedTotalPages = readWordPressTotalPages(response);
+
+    if (page === 1) {
+      totalPages = reportedTotalPages;
+    } else if (reportedTotalPages !== totalPages) {
+      throw new AppError("WP_RESPONSE_INVALID");
+    }
+
+    const batch: unknown = await response.json();
+    assertWordPressCategoryRecords(batch);
+    categories.push(...batch);
+    page += 1;
+  }
+
+  return { categories, pageCount: totalPages };
+}
+
+function assertUniqueWordPressIds(records: Array<{ id: number }>) {
+  if (new Set(records.map((record) => record.id)).size !== records.length) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+}
+
+function inBatches<T>(items: T[], batchSize: number) {
+  const batches: T[][] = [];
+
+  for (let index = 0; index < items.length; index += batchSize) {
+    batches.push(items.slice(index, index + batchSize));
+  }
+
+  return batches;
 }
 
 function buildWordPressCategoryPayload(input: {
@@ -341,12 +473,12 @@ function createOptionalAuthHeaders() {
 async function fetchPostsPage(input: {
   page: number;
   includePrivateStatuses: boolean;
-  authHeaders: ReturnType<typeof createOptionalAuthHeaders>;
+  authHeaders: HeadersInit | null;
 }) {
   const statusParam = input.includePrivateStatuses
     ? "&status=publish,future,draft,pending,private"
     : "";
-  const response = await fetch(
+  const response = await fetchWordPressRead(
     wordpressApiUrl(
       `/posts?per_page=100&page=${input.page}${statusParam}&_fields=id,date,date_gmt,slug,link,categories,title,excerpt,status`,
     ),
@@ -385,40 +517,42 @@ export function parseWordPressScheduledDate(input: {
   return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
 }
 
-export async function fetchAllWordPressPosts() {
+export async function fetchAllWordPressPosts(input: {
+  mode: WordPressSyncModeInput;
+  headers?: HeadersInit;
+}) {
   const allPosts: WordPressPostRecord[] = [];
   let page = 1;
   let totalPages = 1;
-  const authHeaders = createOptionalAuthHeaders();
-  let includePrivateStatuses = Boolean(authHeaders);
 
   while (page <= totalPages) {
-    let response = await fetchPostsPage({
+    const response = await fetchPostsPage({
       page,
-      includePrivateStatuses,
-      authHeaders,
+      includePrivateStatuses: input.mode === "FULL_PRIVATE",
+      authHeaders: input.headers ?? null,
     });
 
-    if (!response.ok && includePrivateStatuses) {
-      includePrivateStatuses = false;
-      response = await fetchPostsPage({
-        page,
-        includePrivateStatuses,
-        authHeaders: null,
-      });
-    }
-
     if (!response.ok) {
-      throw new Error(`WordPress posts sync failed on page ${page}.`);
+      throw await buildWordPressError(response);
     }
 
-    totalPages = Number(response.headers.get("X-WP-TotalPages") ?? "1");
-    const batch = (await response.json()) as WordPressPostRecord[];
+    const reportedTotalPages = readWordPressTotalPages(response);
+
+    if (page === 1) {
+      totalPages = reportedTotalPages;
+    } else if (reportedTotalPages !== totalPages) {
+      throw new AppError("WP_RESPONSE_INVALID");
+    }
+
+    const batch: unknown = await response.json();
+    assertWordPressPostRecords(batch);
     allPosts.push(...batch);
     page += 1;
   }
 
-  return allPosts;
+  assertUniqueWordPressIds(allPosts);
+
+  return { posts: allPosts, pageCount: totalPages };
 }
 
 export async function fetchScheduledWordPressPostTimes(
@@ -475,68 +609,172 @@ export async function fetchScheduledWordPressPostTimes(
   return scheduledTimes;
 }
 
-export async function syncWordPressCatalog() {
-  const categories = await fetchWordPressCategories();
-  const syncedAt = new Date();
+async function fetchWordPressSiteTimezone(headers: HeadersInit) {
+  try {
+    const response = await fetchWordPressRead(wordpressApiUrl("/settings"), { headers });
 
-  for (const category of categories) {
-    await upsertWordPressCategoryRecord(category);
+    if (!response.ok) {
+      return null;
+    }
+
+    const settings = (await response.json()) as WordPressSiteSettings;
+
+    if (typeof settings.timezone_string === "string" && settings.timezone_string.trim()) {
+      return settings.timezone_string.trim();
+    }
+
+    return typeof settings.gmt_offset === "number"
+      ? formatWordPressGmtOffset(settings.gmt_offset)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function syncWordPressCatalog(input: {
+  mode: WordPressSyncModeInput;
+}) {
+  if (input.mode !== "FULL_PRIVATE" && input.mode !== "PUBLIC_ONLY") {
+    throw new AppError("VALIDATION_FAILED");
   }
 
-  const storedCategories = await prisma.category.findMany();
-  const categoryMap = new Map(storedCategories.map((category) => [category.wpCategoryId, category]));
-  const posts = await fetchAllWordPressPosts();
+  const mode = input.mode;
+  const syncRun = await prisma.wordPressSyncRun.create({
+    data: {
+      mode: mode === "FULL_PRIVATE" ? WordPressSyncMode.FULL_PRIVATE : WordPressSyncMode.PUBLIC_ONLY,
+      siteUrl: getServerEnv().WORDPRESS_URL,
+    },
+  });
 
-  for (const post of posts) {
-    const primaryCategory = categoryMap.get(post.categories[0]);
-    const title = stripHtml(post.title.rendered);
+  try {
+    const authHeaders = mode === "FULL_PRIVATE" ? createAuthHeaders() : null;
+    const categoryResult = await fetchAllWordPressCategories({
+      headers: authHeaders ?? undefined,
+    });
+    const postResult = await fetchAllWordPressPosts({
+      mode,
+      headers: authHeaders ?? undefined,
+    });
+    assertUniqueWordPressIds(categoryResult.categories);
+    const siteTimezone = authHeaders ? await fetchWordPressSiteTimezone(authHeaders) : null;
+    const syncedAt = new Date();
 
-    await prisma.sitePost.upsert({
-      where: { wpPostId: post.id },
-      create: {
-        wpPostId: post.id,
-        title,
-        normalizedTitle: normalizeTopicValue(title),
-        slug: post.slug || slugify(title),
-        excerpt: stripHtml(post.excerpt.rendered) || null,
-        canonicalTopicKey: buildCanonicalTopicKey(
-          primaryCategory?.slug ?? "tavern-cellar",
-          title,
-          title,
-          title,
+    for (const categoryBatch of inBatches(categoryResult.categories, 50)) {
+      await prisma.$transaction(
+        categoryBatch.map((category) =>
+          upsertWordPressCategoryRecord(category, {
+            lastSeenAt: syncedAt,
+            lastSeenSyncRunId: syncRun.id,
+          }),
         ),
-        wpStatus: post.status ?? "publish",
-        publishedAt: post.date ? new Date(post.date) : null,
-        link: post.link,
-        primaryCategoryId: primaryCategory?.id ?? null,
-        rawCategoryIds: JSON.stringify(post.categories),
-        lastSyncedAt: syncedAt,
-      },
-      update: {
-        title,
-        normalizedTitle: normalizeTopicValue(title),
-        slug: post.slug || slugify(title),
-        excerpt: stripHtml(post.excerpt.rendered) || null,
-        canonicalTopicKey: buildCanonicalTopicKey(
-          primaryCategory?.slug ?? "tavern-cellar",
-          title,
-          title,
-          title,
-        ),
-        wpStatus: post.status ?? "publish",
-        publishedAt: post.date ? new Date(post.date) : null,
-        link: post.link,
-        primaryCategoryId: primaryCategory?.id ?? null,
-        rawCategoryIds: JSON.stringify(post.categories),
-        lastSyncedAt: syncedAt,
+      );
+    }
+
+    const storedCategories = await prisma.category.findMany();
+    const categoryMap = new Map(storedCategories.map((category) => [category.wpCategoryId, category]));
+
+    for (const postBatch of inBatches(postResult.posts, 50)) {
+      await prisma.$transaction(
+        postBatch.map((post) => {
+          const primaryCategory = categoryMap.get(post.categories[0]);
+          const title = stripHtml(post.title.rendered);
+          const data = {
+            title,
+            normalizedTitle: normalizeTopicValue(title),
+            slug: post.slug || slugify(title),
+            excerpt: stripHtml(post.excerpt.rendered) || null,
+            canonicalTopicKey: buildCanonicalTopicKey(
+              primaryCategory?.slug ?? "tavern-cellar",
+              title,
+              title,
+              title,
+            ),
+            wpStatus: post.status ?? "publish",
+            publishedAt: post.date ? new Date(post.date) : null,
+            link: post.link,
+            primaryCategoryId: primaryCategory?.id ?? null,
+            rawCategoryIds: serializeWordPressCategoryIds(post.categories),
+            lastSyncedAt: syncedAt,
+            lastSeenSyncRunId: syncRun.id,
+            lastSeenAt: syncedAt,
+            isStale: false,
+          };
+
+          return prisma.sitePost.upsert({
+            where: { wpPostId: post.id },
+            create: {
+              wpPostId: post.id,
+              ...data,
+            },
+            update: data,
+          });
+        }),
+      );
+    }
+
+    let stalePostCount = 0;
+    let staleCategoryCount = 0;
+
+    if (mode === "FULL_PRIVATE") {
+      const [stalePosts, staleCategories] = await Promise.all([
+        prisma.sitePost.updateMany({
+          where: {
+            OR: [
+              { lastSeenSyncRunId: null },
+              { lastSeenSyncRunId: { not: syncRun.id } },
+            ],
+          },
+          data: { isStale: true },
+        }),
+        prisma.category.updateMany({
+          where: {
+            OR: [
+              { lastSeenSyncRunId: null },
+              { lastSeenSyncRunId: { not: syncRun.id } },
+            ],
+          },
+          data: { isStale: true },
+        }),
+      ]);
+      stalePostCount = stalePosts.count;
+      staleCategoryCount = staleCategories.count;
+    }
+
+    const state = mode === "FULL_PRIVATE" ? WordPressSyncState.SUCCEEDED : WordPressSyncState.DEGRADED;
+    await prisma.wordPressSyncRun.update({
+      where: { id: syncRun.id },
+      data: {
+        state,
+        completedAt: new Date(),
+        categoryCount: categoryResult.categories.length,
+        postCount: postResult.posts.length,
+        pageCount: categoryResult.pageCount + postResult.pageCount,
+        siteTimezone,
       },
     });
-  }
 
-  return {
-    categoryCount: categories.length,
-    postCount: posts.length,
-  };
+    return {
+      categoryCount: categoryResult.categories.length,
+      mode,
+      postCount: postResult.posts.length,
+      siteTimezone,
+      staleCategoryCount,
+      stalePostCount,
+      state,
+    };
+  } catch (error) {
+    const appError = toAppError(error);
+    await prisma.wordPressSyncRun.update({
+      where: { id: syncRun.id },
+      data: {
+        state: WordPressSyncState.FAILED,
+        completedAt: new Date(),
+        errorCode: appError.code,
+        errorCorrelationId: appError.correlationId,
+      },
+    });
+    throw appError;
+  }
 }
 
 function createAuthHeaders(contentType = "application/json") {
@@ -544,9 +782,65 @@ function createAuthHeaders(contentType = "application/json") {
   return buildBasicAuthHeaders(env.WORDPRESS_USERNAME, env.WORDPRESS_APP_PASSWORD, contentType);
 }
 
-async function upsertWordPressCategoryRecord(
+export async function findWordPressPostByOperationKey(operationKey: string) {
+  const response = await fetchWordPressRead(
+    wordpressFoundryApiUrl(`/publish-attempt/${encodeURIComponent(operationKey)}`),
+    {
+      headers: createAuthHeaders(),
+    },
+  );
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildWordPressError(response);
+  }
+
+  const payload = (await response.json()) as WordPressPublishRecord;
+
+  if (!Number.isInteger(payload.id) || payload.id <= 0 || !payload.status) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+
+  return payload;
+}
+
+async function createWordPressDraftPlaceholder(article: Article, operationKey: string) {
+  const response = await fetchWordPressWrite(wordpressApiUrl("/posts"), {
+    method: "POST",
+    headers: createAuthHeaders(),
+    body: JSON.stringify({
+      title: article.title,
+      slug: article.slug,
+      status: "draft",
+      meta: {
+        _tavern_cellar_publish_operation_key: operationKey,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw await buildWordPressError(response);
+  }
+
+  const payload = (await response.json()) as WordPressPublishRecord;
+
+  if (!Number.isInteger(payload.id) || payload.id <= 0) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+
+  return payload;
+}
+
+function upsertWordPressCategoryRecord(
   category: WordPressCategoryRecord,
-  options: { isActive?: boolean } = {},
+  options: {
+    isActive?: boolean;
+    lastSeenAt?: Date;
+    lastSeenSyncRunId?: string;
+  } = {},
 ) {
   const isActive = options.isActive ?? isAllowedAppCategorySlug(category.slug);
 
@@ -559,6 +853,13 @@ async function upsertWordPressCategoryRecord(
       description: category.description || null,
       postCount: category.count,
       isActive,
+      ...(options.lastSeenAt
+        ? {
+            isStale: false,
+            lastSeenAt: options.lastSeenAt,
+            lastSeenSyncRunId: options.lastSeenSyncRunId,
+          }
+        : {}),
     },
     update: {
       name: category.name,
@@ -566,6 +867,13 @@ async function upsertWordPressCategoryRecord(
       description: category.description || null,
       postCount: category.count,
       ...(options.isActive === undefined ? {} : { isActive }),
+      ...(options.lastSeenAt
+        ? {
+            isStale: false,
+            lastSeenAt: options.lastSeenAt,
+            lastSeenSyncRunId: options.lastSeenSyncRunId,
+          }
+        : {}),
     },
   });
 }
@@ -575,14 +883,14 @@ export async function createWordPressCategory(input: {
   slug?: string | null;
   description?: string | null;
 }) {
-  const response = await fetch(wordpressApiUrl("/categories"), {
+  const response = await fetchWordPressWrite(wordpressApiUrl("/categories"), {
     method: "POST",
     headers: createAuthHeaders(),
     body: JSON.stringify(buildWordPressCategoryPayload(input)),
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("WordPress category creation failed", response);
+    throw await buildWordPressError(response);
   }
 
   return (await response.json()) as WordPressCategoryRecord;
@@ -603,7 +911,7 @@ async function getOrCreateTagIds(tagsValue: string) {
   const tagIds: number[] = [];
 
   for (const tagName of tagNames) {
-    const response = await fetch(wordpressApiUrl("/tags"), {
+    const response = await fetchWordPressWrite(wordpressApiUrl("/tags"), {
       method: "POST",
       headers: createAuthHeaders(),
       body: JSON.stringify({ name: tagName }),
@@ -629,14 +937,15 @@ async function getOrCreateTagIds(tagsValue: string) {
       continue;
     }
 
-    throw new Error(`Tag sync failed for "${tagName}": ${response.status} ${rawBody}`);
+    void rawBody;
+    throw new AppError("WP_RESPONSE_INVALID", { retryable: response.status >= 500 });
   }
 
   return tagIds;
 }
 
 async function detectYoastMetaSupport(postId: number, expectedMetaDescription: string) {
-  const response = await fetch(wordpressApiUrl(`/posts/${postId}?context=edit`), {
+  const response = await fetchWordPressRead(wordpressApiUrl(`/posts/${postId}?context=edit`), {
     headers: createAuthHeaders(),
     cache: "no-store",
   });
@@ -684,14 +993,14 @@ function buildMediaMetadata(article: Article) {
 }
 
 async function syncFeaturedMediaMetadata(mediaId: number, article: Article): Promise<FeaturedMediaInfo> {
-  const response = await fetch(wordpressApiUrl(`/media/${mediaId}`), {
+  const response = await fetchWordPressWrite(wordpressApiUrl(`/media/${mediaId}`), {
     method: "POST",
     headers: createAuthHeaders(),
     body: JSON.stringify(buildMediaMetadata(article)),
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("Media metadata sync failed", response);
+    throw await buildWordPressError(response);
   }
 
   const media = (await response.json()) as WordPressMediaRecord;
@@ -710,7 +1019,7 @@ async function uploadFeaturedMedia(article: Article): Promise<FeaturedMediaInfo 
   const filePath = path.join(process.cwd(), "public", article.featuredImagePath.replace(/^\//, ""));
   const fileBuffer = await fs.readFile(filePath);
   const filename = path.basename(filePath);
-  const response = await fetch(wordpressApiUrl("/media"), {
+  const response = await fetchWordPressWrite(wordpressApiUrl("/media"), {
     method: "POST",
     headers: {
       ...createAuthHeaders(article.featuredImageMimeType ?? "image/png"),
@@ -720,7 +1029,7 @@ async function uploadFeaturedMedia(article: Article): Promise<FeaturedMediaInfo 
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("Media upload failed", response);
+    throw await buildWordPressError(response);
   }
 
   const media = (await response.json()) as WordPressMediaRecord;
@@ -757,14 +1066,14 @@ async function syncBodyMediaMetadata(
   article: Article,
   image: ArticleBodyImage,
 ): Promise<FeaturedMediaInfo> {
-  const response = await fetch(wordpressApiUrl(`/media/${mediaId}`), {
+  const response = await fetchWordPressWrite(wordpressApiUrl(`/media/${mediaId}`), {
     method: "POST",
     headers: createAuthHeaders(),
     body: JSON.stringify(buildBodyMediaMetadata(article, image)),
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("Body image metadata sync failed", response);
+    throw await buildWordPressError(response);
   }
 
   const media = (await response.json()) as WordPressMediaRecord;
@@ -782,7 +1091,7 @@ async function uploadBodyMedia(article: Article, image: ArticleBodyImage): Promi
     const filePath = path.join(process.cwd(), "public", image.publicPath.replace(/^\//, ""));
     const fileBuffer = await fs.readFile(filePath);
     const filename = path.basename(filePath);
-    const response = await fetch(wordpressApiUrl("/media"), {
+    const response = await fetchWordPressWrite(wordpressApiUrl("/media"), {
       method: "POST",
       headers: {
         ...createAuthHeaders(image.mimeType),
@@ -792,7 +1101,7 @@ async function uploadBodyMedia(article: Article, image: ArticleBodyImage): Promi
     });
 
     if (!response.ok) {
-      throw await buildWordPressError("Body image upload failed", response);
+      throw await buildWordPressError(response);
     }
 
     const media = (await response.json()) as WordPressMediaRecord;
@@ -841,6 +1150,12 @@ type WordPressSchedule = {
   utcDateTime: Date;
 };
 
+type PublishProgressCallbacks = {
+  onPostIdentified?: (post: WordPressPublishRecord) => Promise<void>;
+  onMediaComplete?: (post: WordPressPublishRecord) => Promise<void>;
+  onContentComplete?: (post: WordPressPublishRecord) => Promise<void>;
+};
+
 function toWordPressLocalDateTime(value: string) {
   return value.length === 16 ? `${value}:00` : value;
 }
@@ -876,12 +1191,75 @@ export function buildWordPressPostTimingFields(input: {
   return fields;
 }
 
+async function identifyWordPressPost(input: {
+  article: Article;
+  operationKey?: string;
+  allowPlaceholderCreation?: boolean;
+  onPostIdentified?: (post: WordPressPublishRecord) => Promise<void>;
+}) {
+  if (input.article.wpPostId) {
+    const knownPost = {
+      id: input.article.wpPostId,
+      status: input.article.wpStatus ?? "draft",
+    };
+    await input.onPostIdentified?.(knownPost);
+    return knownPost;
+  }
+
+  if (!input.operationKey) {
+    return null;
+  }
+
+  const reconciledPost = await findWordPressPostByOperationKey(input.operationKey);
+
+  if (reconciledPost) {
+    await input.onPostIdentified?.(reconciledPost);
+    return reconciledPost;
+  }
+
+  if (input.allowPlaceholderCreation === false) {
+    throw new AppError("WP_WRITE_UNCERTAIN");
+  }
+
+  try {
+    const createdPost = await createWordPressDraftPlaceholder(input.article, input.operationKey);
+    await input.onPostIdentified?.(createdPost);
+    return createdPost;
+  } catch (error) {
+    const appError = toAppError(error);
+
+    if (appError.code !== "WP_WRITE_UNCERTAIN") {
+      throw appError;
+    }
+
+    const reconciledAfterUncertainWrite = await findWordPressPostByOperationKey(input.operationKey);
+
+    if (!reconciledAfterUncertainWrite) {
+      throw appError;
+    }
+
+    await input.onPostIdentified?.(reconciledAfterUncertainWrite);
+    return reconciledAfterUncertainWrite;
+  }
+}
+
 export async function pushArticleToWordPress(
   article: Article & { category: Category; bodyImages?: ArticleBodyImage[] },
   mode: PublishMode,
   schedule?: WordPressSchedule | null,
-  options: { publishAt?: Date | null } = {},
+  options: {
+    publishAt?: Date | null;
+    operationKey?: string;
+    allowPlaceholderCreation?: boolean;
+    progress?: PublishProgressCallbacks;
+  } = {},
 ) {
+  const identifiedPost = await identifyWordPressPost({
+    article,
+    operationKey: options.operationKey,
+    allowPlaceholderCreation: options.allowPlaceholderCreation,
+    onPostIdentified: options.progress?.onPostIdentified,
+  });
   const uploadedMedia = await uploadFeaturedMedia(article);
   const bodyImages = await uploadBodyMediaImages(article);
   let featuredMedia = uploadedMedia;
@@ -907,6 +1285,7 @@ export async function pushArticleToWordPress(
     bodyImages,
   });
   const tagIds = await getOrCreateTagIds(article.tags);
+  const knownPostId = identifiedPost?.id ?? article.wpPostId;
 
   const body: Record<string, Prisma.JsonValue | string | number | number[] | null> = {
     title: article.title,
@@ -921,6 +1300,9 @@ export async function pushArticleToWordPress(
       _yoast_wpseo_title: article.metaTitle,
       _yoast_wpseo_metadesc: article.metaDescription,
       _yoast_wpseo_focuskw: article.primaryKeyword,
+      ...(options.operationKey
+        ? { _tavern_cellar_publish_operation_key: options.operationKey }
+        : {}),
     },
   };
   Object.assign(
@@ -932,28 +1314,42 @@ export async function pushArticleToWordPress(
     }),
   );
 
-  const endpoint = article.wpPostId
-    ? wordpressApiUrl(`/posts/${article.wpPostId}`)
+  if (knownPostId) {
+    await options.progress?.onMediaComplete?.({
+      id: knownPostId,
+      status: identifiedPost?.status ?? article.wpStatus ?? "draft",
+    });
+  }
+
+  const endpoint = knownPostId
+    ? wordpressApiUrl(`/posts/${knownPostId}`)
     : wordpressApiUrl("/posts");
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWordPressWrite(endpoint, {
     method: "POST",
     headers: createAuthHeaders(),
     body: JSON.stringify(body),
   });
 
   if (!response.ok) {
-    throw await buildWordPressError("WordPress post sync failed", response);
+    throw await buildWordPressError(response);
   }
 
-  const payload = (await response.json()) as {
-    id: number;
-    status: string;
-    date_gmt?: string;
-    link?: string;
-  };
+  const payload = (await response.json()) as WordPressPublishRecord;
 
-  const yoastMetaApplied = await detectYoastMetaSupport(payload.id, article.metaDescription);
+  if (!Number.isInteger(payload.id) || payload.id <= 0 || !payload.status) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+
+  await options.progress?.onContentComplete?.(payload);
+
+  let yoastMetaApplied = false;
+
+  try {
+    yoastMetaApplied = await detectYoastMetaSupport(payload.id, article.metaDescription);
+  } catch {
+    yoastMetaApplied = false;
+  }
 
   return {
     ...payload,

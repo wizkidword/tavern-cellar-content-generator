@@ -1,35 +1,46 @@
 import { NextResponse } from "next/server";
 
 import { suggestPrimaryKeywords } from "@/lib/content-pipeline";
+import { getAppErrorHttpStatus, reportAppError } from "@/lib/errors/app-error";
 import {
-  assertOperatorAccessForRequest,
-  OperatorAccessError,
+  assertOperatorApiAccess,
+  assertProviderActionAllowed,
+  RateLimitedError,
 } from "@/lib/operator-auth";
+import { keywordAssistSchema, parseRequestBody } from "@/lib/validation/schemas";
 
 export async function POST(request: Request) {
   try {
-    assertOperatorAccessForRequest(request);
+    const session = assertOperatorApiAccess(request);
+    assertProviderActionAllowed(session.sid);
 
-    const body = (await request.json()) as {
-      categoryId?: number;
-      notes?: string;
-    };
-
-    const categoryId = Number(body.categoryId ?? 0);
-
-    if (!Number.isFinite(categoryId) || categoryId <= 0) {
-      return NextResponse.json({ error: "Pick a category before generating keywords." }, { status: 400 });
-    }
+    const body = parseRequestBody(keywordAssistSchema, await request.json());
 
     const result = await suggestPrimaryKeywords({
-      categoryId,
+      categoryId: body.categoryId,
       notes: body.notes,
     });
 
     return NextResponse.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Keyword generation failed.";
-    const status = error instanceof OperatorAccessError ? 401 : 500;
-    return NextResponse.json({ error: message }, { status });
+    if (error instanceof RateLimitedError) {
+      return NextResponse.json(
+        { error: { code: error.code, message: error.message } },
+        { status: 429, headers: { "Retry-After": String(error.retryAfterSeconds) } },
+      );
+    }
+
+    const appError = reportAppError(error, "api.assist.keywords");
+    return NextResponse.json(
+      {
+        error: {
+          code: appError.code,
+          correlationId: appError.correlationId,
+          message: appError.message,
+          retryable: appError.retryable,
+        },
+      },
+      { status: getAppErrorHttpStatus(appError.code) },
+    );
   }
 }

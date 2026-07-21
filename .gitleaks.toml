@@ -1,0 +1,15 @@
+title = "Tavern Cellar Foundry secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Deterministic non-production test fixtures"
+regexTarget = "secret"
+regexes = [
+  '''^0123456789abcdef0123456789abcdef$''',
+  '''^publish-operation-key-000[1-3]$''',
+]

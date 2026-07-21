@@ -40,7 +40,8 @@ test("builds section-aware image requests from article headings", () => {
   assert.equal(requests[0]?.sectionHeading, "Saturday Morning Energy");
   assert.match(requests[0]?.prompt ?? "", /Saturday Morning Energy/);
   assert.match(requests[0]?.prompt ?? "", /1980s toy commercials/);
-  assert.match(requests[0]?.altText ?? "", /1980s toy commercials/i);
+  assert.match(requests[0]?.altText ?? "", /Saturday Morning Energy/i);
+  assert.doesNotMatch(requests[0]?.altText ?? "", /1980s toy commercials/i);
   assert.equal(requests[1]?.sectionHeading, "Collector Shelf Memory");
 });
 
@@ -222,4 +223,22 @@ test("removes generated body image markdown without disturbing nearby copy", () 
   assert.doesNotMatch(withoutGeneratedImage, /article-body-1/);
   assert.match(withoutGeneratedImage, /A section/);
   assert.match(withoutGeneratedImage, /https:\/\/example\.com\/reference\.png/);
+});
+
+test("uses the stable asset marker when an operator edits the image markdown", () => {
+  const contentMarkdown = [
+    "## Shelf Memory",
+    "",
+    "<!-- foundry-image:asset-123 -->",
+    "![Operator changed this description](https://example.com/changed-image.png)",
+    "",
+    "Keep this paragraph.",
+  ].join("\n");
+
+  const updated = removeArticleBodyImageMarkdown(contentMarkdown, [
+    { assetKey: "asset-123", publicPath: "/generated/original.png" },
+  ]);
+
+  assert.doesNotMatch(updated, /foundry-image|changed-image/);
+  assert.match(updated, /Keep this paragraph/);
 });

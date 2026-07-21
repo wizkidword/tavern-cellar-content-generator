@@ -1,0 +1,3 @@
+# Prisma records a checksum for each applied migration. Preserve the generated
+# baseline's intentional final blank line without treating it as a review error.
+prisma/migrations/20260721143000_initial_baseline/migration.sql text eol=crlf whitespace=-blank-at-eof

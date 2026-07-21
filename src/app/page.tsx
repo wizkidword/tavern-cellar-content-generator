@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { formatDistanceToNow } from "date-fns";
 
 import {
   syncWordPressCatalogAction,
@@ -6,7 +7,11 @@ import {
 import { FoundryNav } from "@/app/foundry-nav";
 import { NewArticleForm } from "@/app/new-article-form";
 import { getDashboardData } from "@/lib/content-pipeline";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import { getOpenAITextModelLabel } from "@/lib/openai-models";
+import { requireOperatorPage } from "@/lib/operator-auth";
+
+export const dynamic = "force-dynamic";
 
 type HomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -20,10 +25,28 @@ function firstValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function syncRunLabel(state: string) {
+  return state.toLowerCase().replaceAll("_", " ");
+}
+
+function credentialStatus(run: { state: string; errorCode: string | null } | null) {
+  if (run?.state === "SUCCEEDED") {
+    return "valid";
+  }
+
+  if (run?.errorCode === "WP_AUTH_FAILED") {
+    return "invalid";
+  }
+
+  return "unknown";
+}
+
 export default async function HomePage({ searchParams }: HomePageProps) {
+  await requireOperatorPage();
   const params = searchParams ? await searchParams : undefined;
   const message = firstValue(params?.message);
   const error = firstValue(params?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(params?.ref));
   const dashboard = await getDashboardData();
 
   return (
@@ -39,11 +62,79 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   Generate search-friendly stories without re-treading old ground.
                 </h1>
               </div>
-              <form action={syncWordPressCatalogAction}>
-                <button className="action-secondary" type="submit">
-                  Sync Live WordPress History
-                </button>
-              </form>
+              <div className="flex flex-wrap gap-3">
+                <form action={syncWordPressCatalogAction.bind(null, "FULL_PRIVATE")}>
+                  <button className="action-secondary" type="submit">
+                    Full private sync
+                  </button>
+                </form>
+                <form action={syncWordPressCatalogAction.bind(null, "PUBLIC_ONLY")}>
+                  <button className="action-secondary" type="submit">
+                    Public-only sync
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            <div className="mt-6 rounded-[1.4rem] border border-[var(--line)] bg-black/10 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="eyebrow mb-2">Sync health</p>
+                  {dashboard.syncHealth.latestRun ? (
+                    <>
+                      <p className="text-lg font-semibold text-[#fff4e1]">
+                        Latest run: {syncRunLabel(dashboard.syncHealth.latestRun.state)} via{" "}
+                        {dashboard.syncHealth.latestRun.mode === "FULL_PRIVATE"
+                          ? "full private access"
+                          : "public-only access"}
+                      </p>
+                      <p className="mt-2 text-sm text-[var(--muted)]">
+                        {dashboard.syncHealth.latestRun.completedAt
+                          ? `Finished ${formatDistanceToNow(dashboard.syncHealth.latestRun.completedAt, { addSuffix: true })}. `
+                          : "Still running. "}
+                        {dashboard.syncHealth.latestRun.postCount} posts, {dashboard.syncHealth.latestRun.categoryCount} categories, and {dashboard.syncHealth.latestRun.pageCount} pages checked.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-[var(--muted)]">
+                      No WordPress sync has finished yet. Run a full private sync before creating content.
+                    </p>
+                  )}
+                </div>
+                {dashboard.syncHealth.latestRun ? (
+                  <span className="status-pill status-healthy">
+                    {syncRunLabel(dashboard.syncHealth.latestRun.state)}
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
+                {dashboard.syncHealth.lastSuccessfulFullSync?.completedAt
+                  ? `Last successful full private sync: ${formatDistanceToNow(dashboard.syncHealth.lastSuccessfulFullSync.completedAt, { addSuffix: true })}.`
+                  : "No successful full private sync has been recorded yet."}{" "}
+                {dashboard.syncHealth.lastPublicOnlySync?.completedAt
+                  ? `Last public-only sync: ${formatDistanceToNow(dashboard.syncHealth.lastPublicOnlySync.completedAt, { addSuffix: true })}.`
+                  : "No public-only sync has been recorded."}
+              </p>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                Credentials: {credentialStatus(dashboard.syncHealth.lastPrivateSync)}. WordPress timezone: {dashboard.syncHealth.lastSuccessfulFullSync?.siteTimezone ?? "unknown"}.
+                {dashboard.syncHealth.latestRun
+                  ? ` Current mode: ${dashboard.syncHealth.latestRun.mode === "FULL_PRIVATE" ? "full private" : "public-only"}.`
+                  : ""}{" "}
+                {dashboard.syncHealth.stalePostCount > 0 || dashboard.syncHealth.staleCategoryCount > 0
+                  ? `${dashboard.syncHealth.stalePostCount} posts and ${dashboard.syncHealth.staleCategoryCount} categories are marked stale.`
+                  : "No stale WordPress records are currently marked."}
+              </p>
+              {dashboard.syncHealth.lastFailedSync ? (
+                <p className="mt-2 text-xs leading-5 text-[#ffd2c7]">
+                  Last sync error: {dashboard.syncHealth.lastFailedSync.errorCode ?? "OPERATION_FAILED"}
+                  {dashboard.syncHealth.lastFailedSync.errorCorrelationId
+                    ? ` (reference ${dashboard.syncHealth.lastFailedSync.errorCorrelationId})`
+                    : ""}.
+                </p>
+              ) : null}
+              <p className="mt-2 text-xs leading-5 text-[#d7bf95]">
+                Public-only sync is an emergency visibility check. It never marks records missing or stale, so it cannot replace a successful full private sync.
+              </p>
             </div>
 
             <div className="grid gap-4 md:grid-cols-3">
@@ -83,7 +174,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
 
             {message ? <p className="message message-success mb-4">{message}</p> : null}
-            {error ? <p className="message message-error mb-4">{error}</p> : null}
+            {error ? <p className="message message-error mb-4">{errorMessage}</p> : null}
 
             <NewArticleForm categories={dashboard.categories} />
           </div>

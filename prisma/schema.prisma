@@ -15,12 +15,77 @@ enum ArticleStatus {
   SCHEDULED
 }
 
+enum ArticleClaimState {
+  OPEN
+  VERIFIED
+  DISMISSED
+}
+
+enum PublishOperationState {
+  IDLE
+  IN_PROGRESS
+  SUCCEEDED
+  FAILED
+  UNCERTAIN
+}
+
+enum PublishAttemptState {
+  STARTED
+  POST_IDENTIFIED
+  MEDIA_COMPLETE
+  CONTENT_COMPLETE
+  SUCCEEDED
+  FAILED
+  UNCERTAIN
+}
+
+enum WordPressSyncMode {
+  FULL_PRIVATE
+  PUBLIC_ONLY
+}
+
+enum WordPressSyncState {
+  RUNNING
+  SUCCEEDED
+  DEGRADED
+  FAILED
+}
+
+enum ImageOperationState {
+  IDLE
+  GENERATING
+  SUCCEEDED
+  FAILED
+  CLEANUP_WARNING
+}
+
 enum ContentOpportunityStatus {
   IDEA
   APPROVED
+  GENERATING
   GENERATED
+  GENERATION_FAILED
   REJECTED
   ARCHIVED
+}
+
+enum TopicClusterSource {
+  AUTO
+  MANUAL
+}
+
+enum GenerationOperation {
+  ARTICLE_DRAFT
+  ARTICLE_COMPARISON
+  OPPORTUNITY_IDEAS
+  KEYWORD_IDEAS
+  ANGLE_IDEAS
+}
+
+enum GenerationRunState {
+  RUNNING
+  SUCCEEDED
+  FAILED
 }
 
 enum TopicClusterItemType {
@@ -37,6 +102,9 @@ model Category {
   description          String?
   isActive             Boolean              @default(false)
   postCount            Int                  @default(0)
+  lastSeenSyncRunId    String?
+  lastSeenAt           DateTime?
+  isStale              Boolean              @default(false)
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
   articles             Article[]
@@ -59,6 +127,9 @@ model SitePost {
   primaryCategoryId Int?
   rawCategoryIds    String
   lastSyncedAt      DateTime  @default(now())
+  lastSeenSyncRunId String?
+  lastSeenAt        DateTime?
+  isStale           Boolean   @default(false)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -70,6 +141,7 @@ model SitePost {
   @@index([primaryCategoryId])
   @@index([canonicalTopicKey])
   @@index([normalizedTitle])
+  @@index([isStale])
 }
 
 model Article {
@@ -93,15 +165,25 @@ model Article {
   featuredImageAlt                       String
   featuredImagePath                      String?
   featuredImageMimeType                  String?
+  featuredImageState                     ImageOperationState @default(IDLE)
+  featuredImageErrorCode                 String?
+  featuredImageLastAttemptAt             DateTime?
+  bodyImagesState                        ImageOperationState @default(IDLE)
+  bodyImagesErrorCode                    String?
+  bodyImagesLastAttemptAt                DateTime?
+  bodyImagesOperationKey                 String?
   wpMediaId                              Int?
   openAiTextModel                        String
   openAiImageModel                       String?
   categoryId                             Int
   status                                 ArticleStatus @default(GENERATED)
+  publishState                           PublishOperationState @default(IDLE)
+  activePublishOperationKey              String?       @unique
   wpPostId                               Int?          @unique
   wpStatus                               String?
   scheduledFor                           DateTime?
   scheduledForLocal                      String?
+  scheduledForTimezone                   String?
   publishedAt                            DateTime?
   qualityWordCount                       Int           @default(0)
   qualityHeadingCount                    Int           @default(0)
@@ -116,17 +198,76 @@ model Article {
   updatedAt                              DateTime      @updatedAt
 
   category                Category                 @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  claims                  ArticleClaim[]
   bodyImages              ArticleBodyImage[]
   contentOpportunities    ContentOpportunity[]
   modelComparisons        ArticleModelComparison[]
+  publishAttempts         PublishAttempt[]
   opportunitySimilarPosts OpportunitySimilarPost[]
   topicClusterItems       TopicClusterItem[]
+  generationRuns          GenerationRun[]
 
   @@unique([categoryId, canonicalTopicKey])
   @@unique([categoryId, slug])
   @@index([status])
   @@index([normalizedTitle])
   @@index([normalizedKeyword])
+  @@index([publishState])
+}
+
+model ArticleClaim {
+  id        String            @id @default(cuid())
+  articleId String
+  claim     String
+  status    ArticleClaimState @default(OPEN)
+  sourceUrl String?
+  note      String?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId, status])
+  @@index([status, updatedAt])
+}
+
+model PublishAttempt {
+  id                  String              @id @default(cuid())
+  articleId           String
+  operationKey        String              @unique
+  desiredWpStatus     String
+  state               PublishAttemptState @default(STARTED)
+  wpPostId            Int?
+  lastCheckpoint      String?
+  errorCode           String?
+  errorCorrelationId  String?
+  errorDetailInternal String?
+  warningCode         String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId, updatedAt])
+  @@index([state])
+}
+
+model WordPressSyncRun {
+  id                 String             @id @default(cuid())
+  mode               WordPressSyncMode
+  state              WordPressSyncState @default(RUNNING)
+  startedAt          DateTime           @default(now())
+  completedAt        DateTime?
+  postCount          Int                @default(0)
+  categoryCount      Int                @default(0)
+  pageCount          Int                @default(0)
+  errorCode          String?
+  errorCorrelationId String?
+  siteTimezone       String?
+  siteUrl            String
+
+  @@index([state, startedAt])
+  @@index([mode, completedAt])
 }
 
 model ArticleBodyImage {
@@ -137,6 +278,7 @@ model ArticleBodyImage {
   sectionHeading String
   sortOrder      Int
   publicPath     String
+  assetKey       String?  @unique
   mimeType       String   @default("image/png")
   imageModel     String
   wpMediaId      Int?
@@ -179,7 +321,7 @@ model ArticleModelComparison {
 
   sourceArticle Article @relation(fields: [sourceArticleId], references: [id], onDelete: Cascade)
 
-  @@unique([sourceArticleId, openAiTextModel])
+  @@index([sourceArticleId, openAiTextModel])
   @@index([sourceArticleId])
   @@index([openAiTextModel])
 }
@@ -204,6 +346,9 @@ model ContentOpportunity {
   scoreReasons         String
   duplicateRiskLabel   String
   generatedArticleId   String?
+  generationAttemptKey String?                  @unique
+  generationErrorCode  String?
+  generationLastAttemptAt DateTime?
   topicClusterId       String?
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
@@ -214,11 +359,42 @@ model ContentOpportunity {
   internalLinks     OpportunityInternalLink[]
   similarPosts      OpportunitySimilarPost[]
   topicClusterItems TopicClusterItem[]
+  generationRuns    GenerationRun[]
 
   @@unique([categoryId, normalizedKeyword, normalizedAngle])
   @@index([categoryId])
   @@index([status])
+  @@index([generationAttemptKey])
   @@index([overallScore])
+}
+
+model GenerationRun {
+  id                  String               @id @default(cuid())
+  operation           GenerationOperation
+  state               GenerationRunState   @default(RUNNING)
+  articleId           String?
+  opportunityId       String?
+  provider            String
+  model               String
+  promptVersion       String
+  startedAt           DateTime             @default(now())
+  completedAt         DateTime?
+  latencyMs           Int?
+  inputTokens         Int?
+  outputTokens        Int?
+  totalTokens         Int?
+  estimatedCostCents  Int?
+  retryCount          Int                  @default(0)
+  errorCode           String?
+  createdAt           DateTime             @default(now())
+
+  article     Article?            @relation(fields: [articleId], references: [id], onDelete: SetNull)
+  opportunity ContentOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+
+  @@index([operation, startedAt])
+  @@index([state, startedAt])
+  @@index([articleId])
+  @@index([opportunityId])
 }
 
 model OpportunityInternalLink {
@@ -256,6 +432,8 @@ model OpportunitySimilarPost {
   @@index([sitePostId])
   @@index([articleId])
   @@index([similarity])
+  @@unique([opportunityId, sitePostId])
+  @@unique([opportunityId, articleId])
 }
 
 model TopicCluster {
@@ -264,6 +442,8 @@ model TopicCluster {
   normalizedName String   @unique
   description    String
   categoryId     Int?
+  source         TopicClusterSource @default(AUTO)
+  isArchived     Boolean             @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -272,6 +452,7 @@ model TopicCluster {
   items         TopicClusterItem[]
 
   @@index([categoryId])
+  @@index([source, isArchived])
 }
 
 model TopicClusterItem {
@@ -283,6 +464,7 @@ model TopicClusterItem {
   opportunityId  String?
   label          String
   sortOrder      Int                  @default(0)
+  source         TopicClusterSource   @default(AUTO)
   createdAt      DateTime             @default(now())
 
   topicCluster TopicCluster        @relation(fields: [topicClusterId], references: [id], onDelete: Cascade)
@@ -295,4 +477,8 @@ model TopicClusterItem {
   @@index([sitePostId])
   @@index([articleId])
   @@index([opportunityId])
+  @@index([source])
+  @@unique([topicClusterId, sitePostId])
+  @@unique([topicClusterId, articleId])
+  @@unique([topicClusterId, opportunityId])
 }

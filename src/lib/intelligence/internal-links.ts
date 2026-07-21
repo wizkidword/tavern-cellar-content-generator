@@ -31,8 +31,7 @@ type RecommendInternalLinksInput = {
   limit?: number;
 };
 
-type ResolveGeneratedInternalLinksInput = RecommendInternalLinksInput & {
-  generatedLinksText: string;
+type ResolveVerifiedInternalLinksInput = RecommendInternalLinksInput & {
   categoryFallback: {
     title: string;
     url: string;
@@ -159,18 +158,11 @@ export function recommendInternalLinks(input: RecommendInternalLinksInput) {
     .slice(0, limit);
 }
 
-export function resolveGeneratedInternalLinks(input: ResolveGeneratedInternalLinksInput) {
-  const generatedContext = input.generatedLinksText.trim();
-  const recommendationBrief = [
-    input.brief,
-    generatedContext ? `Generated internal link suggestions:\n${generatedContext}` : null,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+export function resolveVerifiedInternalLinks(input: ResolveVerifiedInternalLinksInput) {
   const recommendations = recommendInternalLinks({
     keyword: input.keyword,
     angle: input.angle,
-    brief: recommendationBrief,
+    brief: input.brief,
     categoryId: input.categoryId,
     candidates: input.candidates.filter((candidate) => isPublicPostStatus(candidate.wpStatus)),
     limit: input.limit,

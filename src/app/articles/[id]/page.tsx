@@ -5,20 +5,28 @@ import { format } from "date-fns";
 
 import {
   generateArticleComparisonAction,
+  insertArticleInternalLinkAction,
   publishNowAction,
   randomScheduleArticleAction,
+  reconcileArticlePublishAction,
   regenerateArticleBodyImagesAction,
   regenerateFeaturedImageAction,
+  createArticleClaimAction,
+  saveArticleClaimAction,
   saveArticleReviewAction,
   scheduleArticleAction,
   sendWordPressDraftAction,
 } from "@/app/actions";
+import { PublishActionButton } from "@/app/publish-action-button";
 import { MAX_ARTICLE_BODY_IMAGE_COUNT } from "@/lib/article-body-images";
+import { getArticleInternalLinkSuggestions } from "@/lib/article-internal-links";
 import {
   getArticleById,
+  getArticleImageAltWarnings,
   getArticleImageRecoveryState,
   getDashboardData,
 } from "@/lib/content-pipeline";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import {
   DEFAULT_FAL_IMAGE_MODEL,
   DEFAULT_FEATURED_IMAGE_PROVIDER,
@@ -31,10 +39,13 @@ import {
   resolveOpenAIImageModel,
 } from "@/lib/featured-image-models";
 import { parseArticleQualityWarnings } from "@/lib/intelligence/article-quality";
+import { requireOperatorPage } from "@/lib/operator-auth";
 import {
   getComparisonCandidateOpenAITextModels,
   getOpenAITextModelLabel,
 } from "@/lib/openai-models";
+
+export const dynamic = "force-dynamic";
 
 type ArticlePageProps = {
   params: Promise<{ id: string }>;
@@ -62,6 +73,7 @@ function qualitySignal(value: boolean) {
 }
 
 export default async function ArticlePage({ params, searchParams }: ArticlePageProps) {
+  await requireOperatorPage();
   const { id } = await params;
   const article = await getArticleById(id);
 
@@ -69,7 +81,10 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
     notFound();
   }
 
-  const dashboard = await getDashboardData();
+  const [dashboard, linkSuggestions] = await Promise.all([
+    getDashboardData(),
+    getArticleInternalLinkSuggestions(id),
+  ]);
   const categoryOptions = dashboard.categories.some((category) => category.id === article.categoryId)
     ? dashboard.categories
     : [
@@ -84,19 +99,33 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
   const query = searchParams ? await searchParams : undefined;
   const message = firstValue(query?.message);
   const error = firstValue(query?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(query?.ref));
   const sourceOpportunity = article.contentOpportunities[0];
   const qualityWarnings = parseArticleQualityWarnings(article.qualityWarnings);
   const comparisonModels = getComparisonCandidateOpenAITextModels(article.openAiTextModel);
+  const availableLinkSuggestions = (linkSuggestions ?? []).filter((suggestion) => !suggestion.alreadyLinked);
+  const existingLinkSuggestions = (linkSuggestions ?? []).filter((suggestion) => suggestion.alreadyLinked);
   const hasComparisons = article.modelComparisons.length > 0;
   const bodyImageDefaultCount = String(article.bodyImages.length || 2);
   const imageRecovery = getArticleImageRecoveryState({
     featuredImagePath: article.featuredImagePath,
     bodyImageCount: article.bodyImages.length,
     notes: article.notes,
+    featuredImageState: article.featuredImageState,
+    bodyImagesState: article.bodyImagesState,
+  });
+  const imageAltWarnings = getArticleImageAltWarnings({
+    featuredImageAlt: article.featuredImageAlt,
+    bodyImageAlts: article.bodyImages.map((image) => image.altText),
   });
   const openAiImageModelDefault = article.openAiImageModel
     ? resolveOpenAIImageModel(article.openAiImageModel)
     : DEFAULT_OPENAI_IMAGE_MODEL;
+  const latestPublishAttempt = article.publishAttempts[0] ?? null;
+  const canReconcilePublish =
+    article.publishState === "IN_PROGRESS" ||
+    latestPublishAttempt?.state === "FAILED" ||
+    latestPublishAttempt?.state === "UNCERTAIN";
 
   return (
     <main className="app-shell">
@@ -122,7 +151,7 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
         </div>
 
         {message ? <p className="message message-success mb-4">{message}</p> : null}
-        {error ? <p className="message message-error mb-4">{error}</p> : null}
+        {error ? <p className="message message-error mb-4">{errorMessage}</p> : null}
 
         <section className="panel mb-6 rounded-[1.5rem] p-4 md:p-5">
           <div className="flex flex-wrap items-center justify-between gap-4">
@@ -226,60 +255,116 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
 
                 <div>
                   <label className="label" htmlFor="scheduledFor">
-                    Schedule For
+                    Schedule for (this workstation)
                   </label>
                   <input
                     className="field"
                     id="scheduledFor"
                     name="scheduledFor"
                     type="datetime-local"
-                    defaultValue={article.scheduledForLocal ?? formatDateInput(article.scheduledFor)}
+                    defaultValue={formatDateInput(article.scheduledFor)}
                   />
-                  {article.scheduledForLocal ? (
-                    <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
-                      WordPress local schedule target: {article.scheduledForLocal.replace("T", " ")}
+                  <div className="mt-2 space-y-1 text-xs leading-5 text-[var(--muted)]">
+                    <p>
+                      WordPress site timezone: {article.scheduledForTimezone ?? dashboard.syncHealth.lastSuccessfulFullSync?.siteTimezone ?? "not confirmed by a full private sync"}.
                     </p>
-                  ) : null}
+                    {article.scheduledFor ? (
+                      <>
+                        <p>Workstation time: {format(article.scheduledFor, "PPpp")}.</p>
+                        <p>
+                          WordPress site target: {article.scheduledForLocal?.replace("T", " ") ?? "not set"}
+                          {article.scheduledForTimezone ? ` (${article.scheduledForTimezone})` : ""}.
+                        </p>
+                        <p>UTC instant: {article.scheduledFor.toISOString()}.</p>
+                      </>
+                    ) : (
+                      <p>After saving, Foundry will show the WordPress-site target and the matching UTC instant.</p>
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid gap-3">
+                  <Link className="action-primary text-center" href={`/articles/${article.id}/preflight`}>
+                    Open Exact Publish Preflight
+                  </Link>
                   <button className="action-primary" type="submit">
                     Save Review Changes
                   </button>
-                  <button
+                  <PublishActionButton
                     className="action-secondary"
                     formAction={sendWordPressDraftAction.bind(null, article.id)}
+                    pendingLabel="Saving WordPress Draft..."
                     type="submit"
                   >
                     Push WordPress Draft
-                  </button>
-                  <button
+                  </PublishActionButton>
+                  <PublishActionButton
                     className="action-secondary"
                     formAction={publishNowAction.bind(null, article.id)}
+                    pendingLabel="Publishing..."
                     type="submit"
                   >
                     Publish Now
-                  </button>
-                  <button
+                  </PublishActionButton>
+                  <PublishActionButton
                     className="action-secondary"
                     formAction={scheduleArticleAction.bind(null, article.id)}
+                    pendingLabel="Scheduling..."
                     type="submit"
                   >
                     Schedule in WordPress
-                  </button>
-                  <button
+                  </PublishActionButton>
+                  <PublishActionButton
                     className="action-secondary"
                     formAction={randomScheduleArticleAction.bind(null, article.id)}
+                    pendingLabel="Finding a schedule..."
                     type="submit"
                   >
                     Random Schedule (Up to 60 Days)
-                  </button>
+                  </PublishActionButton>
                 </div>
 
                 <div className="rounded-[1.3rem] border border-[var(--line)] bg-black/10 px-4 py-4 text-sm text-[var(--muted)]">
                   WordPress post ID: {article.wpPostId ?? "Not created yet"}
                   <br />
                   WordPress status: {article.wpStatus ?? "Local only"}
+                  <br />
+                  Publish recovery state: {article.publishState.replaceAll("_", " ")}
+                  {latestPublishAttempt ? (
+                    <>
+                      <br />
+                      Latest publish checkpoint: {latestPublishAttempt.lastCheckpoint ?? latestPublishAttempt.state}
+                      {latestPublishAttempt.wpPostId ? (
+                        <>
+                          <br />
+                          Recovered WordPress post ID: {latestPublishAttempt.wpPostId}
+                        </>
+                      ) : null}
+                      {latestPublishAttempt.errorCode ? (
+                        <p className="mt-3 text-[#ffd2c7]">
+                          {getErrorFeedback(
+                            latestPublishAttempt.errorCode,
+                            latestPublishAttempt.errorCorrelationId ?? undefined,
+                          )}
+                        </p>
+                      ) : null}
+                      {latestPublishAttempt.warningCode ? (
+                        <p className="mt-3 text-[#ffe7aa]">
+                          WordPress accepted the core post update, but the optional Yoast metadata could not be confirmed.
+                        </p>
+                      ) : null}
+                      {canReconcilePublish ? (
+                        <PublishActionButton
+                          className="action-primary mt-3 w-full"
+                          formAction={reconcileArticlePublishAction.bind(null, article.id)}
+                          pendingLabel="Reconciling publish..."
+                          type="submit"
+                        >
+                          Reconcile and Retry Publish
+                        </PublishActionButton>
+                      ) : null}
+                    </>
+                  ) : null}
                 </div>
               </div>
             </section>
@@ -439,6 +524,14 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                   </div>
                 )}
 
+                <p className="text-xs leading-5 text-[var(--muted)]">
+                  Asset state: {article.featuredImageState.replaceAll("_", " ").toLowerCase()}
+                  {article.featuredImageErrorCode ? ` (${article.featuredImageErrorCode})` : ""}.
+                  {article.featuredImageLastAttemptAt
+                    ? ` Last attempted ${format(article.featuredImageLastAttemptAt, "PPpp")}.`
+                    : ""}
+                </p>
+
                 {imageRecovery.featuredImage.canRetry ? (
                   <div className="message message-error">
                     <p className="font-semibold text-[#fff4e1]">
@@ -485,6 +578,13 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                     defaultValue={article.featuredImageAlt}
                     required
                   />
+                  {imageAltWarnings.length > 0 ? (
+                    <div className="mt-2 space-y-1 text-xs leading-5 text-[#ffd2c7]">
+                      {imageAltWarnings.map((warning) => (
+                        <p key={warning}>{warning}</p>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div>
@@ -592,6 +692,14 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                   </div>
                 )}
 
+                <p className="text-xs leading-5 text-[var(--muted)]">
+                  Asset state: {article.bodyImagesState.replaceAll("_", " ").toLowerCase()}
+                  {article.bodyImagesErrorCode ? ` (${article.bodyImagesErrorCode})` : ""}.
+                  {article.bodyImagesLastAttemptAt
+                    ? ` Last attempted ${format(article.bodyImagesLastAttemptAt, "PPpp")}.`
+                    : ""}
+                </p>
+
                 {imageRecovery.bodyImages.reason === "failed" ? (
                   <div className="message message-error">
                     <p className="font-semibold text-[#fff4e1]">
@@ -696,6 +804,208 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
             </section>
           </aside>
         </form>
+
+        <section className="panel mt-6 rounded-[2rem] p-6 md:p-8">
+          <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="eyebrow mb-3">Internal links</p>
+              <h2 className="display text-3xl font-semibold text-[#fff1d7]">Verified link suggestions</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
+                Each target comes from the saved WordPress catalog or another local article. Applying a suggestion
+                updates the saved draft, so save any editor changes first.
+              </p>
+            </div>
+            <span className="rounded-full border border-[var(--line)] px-4 py-2 text-sm text-[var(--muted)]">
+              {availableLinkSuggestions.length} ready
+            </span>
+          </div>
+
+          {availableLinkSuggestions.length > 0 ? (
+            <div className="grid gap-4 xl:grid-cols-2">
+              {availableLinkSuggestions.slice(0, 6).map((suggestion) => (
+                <article
+                  className="rounded-[1.4rem] border border-[var(--line)] bg-black/10 p-5"
+                  key={suggestion.targetKey}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-lg font-semibold text-[#fff1d7]">{suggestion.title}</p>
+                      <p className="mt-1 text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                        {suggestion.targetType === "LOCAL_ARTICLE" ? "Local article" : "WordPress catalog"} · {suggestion.confidence}% match
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-[var(--line)] px-3 py-1 text-xs text-[var(--muted)]">
+                      {suggestion.location}
+                    </span>
+                  </div>
+                  <dl className="mt-4 space-y-2 text-sm leading-6 text-[var(--muted)]">
+                    <div>
+                      <dt className="inline font-medium text-[#fff1d7]">Anchor: </dt>
+                      <dd className="inline">{suggestion.anchor}</dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium text-[#fff1d7]">Why: </dt>
+                      <dd className="inline">{suggestion.reason}</dd>
+                    </div>
+                    <div className="break-all">
+                      <dt className="inline font-medium text-[#fff1d7]">Target: </dt>
+                      <dd className="inline">{suggestion.url}</dd>
+                    </div>
+                  </dl>
+                  {suggestion.unpublishedWarning ? (
+                    <p className="mt-4 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm leading-6 text-amber-100">
+                      {suggestion.unpublishedWarning}
+                    </p>
+                  ) : null}
+                  <form action={insertArticleInternalLinkAction.bind(null, article.id, suggestion.targetKey)} className="mt-5">
+                    <button className="action-primary w-full" type="submit">
+                      Insert Link Once
+                    </button>
+                  </form>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-4 py-10 text-center text-[var(--muted)]">
+              No safe new internal-link targets match this saved draft yet.
+            </div>
+          )}
+
+          {existingLinkSuggestions.length > 0 ? (
+            <p className="mt-5 text-sm leading-6 text-[var(--muted)]">
+              Already linked in this saved draft: {existingLinkSuggestions.map((suggestion) => suggestion.title).join(", ")}.
+              Duplicate targets are not offered again.
+            </p>
+          ) : null}
+        </section>
+
+        <section className="panel mt-6 rounded-[2rem] p-6 md:p-8">
+          <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="eyebrow mb-3">Claims to verify</p>
+              <h2 className="display text-3xl font-semibold text-[#fff1d7]">Editorial fact check</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
+                Keep only claims that need a source or editorial decision. A generated suggestion is never
+                verified automatically.
+              </p>
+            </div>
+            <span className="rounded-full border border-[var(--line)] px-4 py-2 text-sm text-[var(--muted)]">
+              {article.claims.filter((claim) => claim.status === "OPEN").length} open
+            </span>
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+            <div className="space-y-4">
+              {article.claims.length > 0 ? (
+                article.claims.map((claim) => (
+                  <form
+                    action={saveArticleClaimAction.bind(null, article.id, claim.id)}
+                    className="rounded-[1.4rem] border border-[var(--line)] bg-black/10 p-4"
+                    key={claim.id}
+                  >
+                    <div className="grid gap-4">
+                      <div>
+                        <label className="label" htmlFor={`claim-${claim.id}`}>
+                          Claim
+                        </label>
+                        <textarea
+                          className="field min-h-24"
+                          defaultValue={claim.claim}
+                          id={`claim-${claim.id}`}
+                          name="claim"
+                          required
+                        />
+                      </div>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                          <label className="label" htmlFor={`claim-status-${claim.id}`}>
+                            State
+                          </label>
+                          <select
+                            className="field"
+                            defaultValue={claim.status}
+                            id={`claim-status-${claim.id}`}
+                            name="status"
+                          >
+                            <option value="OPEN">Open — needs verification</option>
+                            <option value="VERIFIED">Verified</option>
+                            <option value="DISMISSED">Dismissed</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="label" htmlFor={`claim-source-${claim.id}`}>
+                            Source URL (optional)
+                          </label>
+                          <input
+                            className="field"
+                            defaultValue={claim.sourceUrl ?? ""}
+                            id={`claim-source-${claim.id}`}
+                            name="sourceUrl"
+                            placeholder="https://…"
+                            type="url"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="label" htmlFor={`claim-note-${claim.id}`}>
+                          Editorial note (optional)
+                        </label>
+                        <textarea
+                          className="field min-h-20"
+                          defaultValue={claim.note ?? ""}
+                          id={`claim-note-${claim.id}`}
+                          name="note"
+                        />
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-xs text-[var(--muted)]">
+                          Last updated {format(claim.updatedAt, "PPp")}.
+                        </p>
+                        <button className="action-secondary" type="submit">
+                          Save Claim
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                ))
+              ) : (
+                <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-4 py-10 text-center text-[var(--muted)]">
+                  No claims are waiting for review.
+                </div>
+              )}
+            </div>
+
+            <form action={createArticleClaimAction.bind(null, article.id)} className="rounded-[1.5rem] border border-[var(--line)] bg-black/10 p-5">
+              <p className="eyebrow mb-3">Add a claim</p>
+              <p className="mb-5 text-sm leading-6 text-[var(--muted)]">
+                Use this for a fact, date, number, attribution, or statement that deserves human confirmation.
+              </p>
+              <div className="space-y-4">
+                <div>
+                  <label className="label" htmlFor="new-claim">
+                    Claim
+                  </label>
+                  <textarea className="field min-h-28" id="new-claim" name="claim" required />
+                </div>
+                <div>
+                  <label className="label" htmlFor="new-claim-source">
+                    Source URL (optional)
+                  </label>
+                  <input className="field" id="new-claim-source" name="sourceUrl" placeholder="https://…" type="url" />
+                </div>
+                <div>
+                  <label className="label" htmlFor="new-claim-note">
+                    Editorial note (optional)
+                  </label>
+                  <textarea className="field min-h-24" id="new-claim-note" name="note" />
+                </div>
+                <button className="action-primary w-full" type="submit">
+                  Add Open Claim
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
       </div>
     </main>
   );

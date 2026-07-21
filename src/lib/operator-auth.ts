@@ -1,110 +1,80 @@
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
+import { redirect } from "next/navigation";
 
-import { getServerEnv } from "@/lib/env";
+import {
+  assertOperatorRequest,
+  assertSameOrigin,
+  getOperatorSessionFromCookieHeader,
+  getOperatorSessionFromCookieValue,
+  OperatorAccessError,
+} from "@/lib/auth/guards";
+import { assertProviderRequestAllowed } from "@/lib/auth/rate-limit";
+import {
+  createOperatorSessionToken,
+  SESSION_COOKIE_NAME,
+  timingSafeStringEqual,
+} from "@/lib/auth/session";
+import { getOperatorAuthConfig } from "@/lib/env";
 
-export class OperatorAccessError extends Error {
-  constructor() {
-    super(
-      "Operator access denied. Use Foundry from localhost or configure FOUNDRY_OPERATOR_TOKEN for remote access.",
-    );
-    this.name = "OperatorAccessError";
+export { CsrfRejectedError, OperatorAccessError } from "@/lib/auth/guards";
+export { RateLimitedError } from "@/lib/auth/rate-limit";
+
+export async function requireOperatorPage() {
+  const config = getOperatorAuthConfig();
+  const cookieStore = await cookies();
+  const session = getOperatorSessionFromCookieValue(
+    cookieStore.get(SESSION_COOKIE_NAME)?.value,
+    config,
+  );
+
+  if (!session) {
+    redirect("/login");
   }
+
+  return session;
 }
 
-type OperatorAccessInput = {
-  host?: string | null;
-  origin?: string | null;
-  token?: string | null;
-};
-
-function hostnameFromHost(host: string | null | undefined) {
-  if (!host) {
-    return "";
-  }
-
-  const trimmed = host.trim().toLowerCase();
-
-  if (trimmed.startsWith("[")) {
-    return trimmed.slice(1, trimmed.indexOf("]"));
-  }
-
-  return trimmed.split(":")[0];
-}
-
-function hostnameFromOrigin(origin: string | null | undefined) {
-  if (!origin) {
-    return "";
-  }
-
-  try {
-    return new URL(origin).hostname.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-function isLocalHostname(hostname: string) {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
-
-function cookieValue(cookieHeader: string | null, name: string) {
-  if (!cookieHeader) {
-    return null;
-  }
-
-  for (const part of cookieHeader.split(";")) {
-    const [rawName, ...rawValue] = part.trim().split("=");
-
-    if (rawName === name) {
-      return decodeURIComponent(rawValue.join("="));
-    }
-  }
-
-  return null;
-}
-
-export function assertOperatorAccess(input: OperatorAccessInput) {
-  const env = getServerEnv();
-  const hostName = hostnameFromHost(input.host);
-  const originName = hostnameFromOrigin(input.origin);
-  const isLocal = isLocalHostname(hostName) || isLocalHostname(originName);
-
-  if (isLocal) {
-    return;
-  }
-
-  if (env.FOUNDRY_OPERATOR_TOKEN && input.token === env.FOUNDRY_OPERATOR_TOKEN) {
-    return;
-  }
-
-  throw new OperatorAccessError();
-}
-
-export async function assertOperatorAccessFromHeaders() {
+export async function assertOperatorActionAccess() {
+  const config = getOperatorAuthConfig();
   const headerStore = await headers();
-  const cookieHeader = headerStore.get("cookie");
+  const session = getOperatorSessionFromCookieHeader(headerStore.get("cookie"), config);
 
-  assertOperatorAccess({
-    host: headerStore.get("x-forwarded-host") ?? headerStore.get("host"),
-    origin: headerStore.get("origin"),
-    token:
-      headerStore.get("x-foundry-operator-token") ??
-      cookieValue(cookieHeader, "foundry_operator_token"),
+  if (!session) {
+    throw new OperatorAccessError();
+  }
+
+  assertSameOrigin(headerStore.get("origin"), config.appOrigin);
+  return session;
+}
+
+export function assertOperatorApiAccess(request: Request) {
+  return assertOperatorRequest(request, getOperatorAuthConfig());
+}
+
+export function assertOperatorCredential(candidate: string) {
+  const config = getOperatorAuthConfig();
+  return timingSafeStringEqual(candidate, config.operatorToken);
+}
+
+export async function createOperatorSession() {
+  const config = getOperatorAuthConfig();
+  const token = createOperatorSessionToken(config.sessionSecret, config.maxAgeSeconds);
+  const cookieStore = await cookies();
+
+  cookieStore.set(SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    maxAge: config.maxAgeSeconds,
+    path: "/",
+    sameSite: "strict",
+    secure: config.secureCookie,
   });
 }
 
-export function assertOperatorAccessForRequest(request: Request) {
-  const requestUrl = new URL(request.url);
-  const cookieHeader = request.headers.get("cookie");
+export async function clearOperatorSession() {
+  const cookieStore = await cookies();
+  cookieStore.delete(SESSION_COOKIE_NAME);
+}
 
-  assertOperatorAccess({
-    host:
-      request.headers.get("x-forwarded-host") ??
-      request.headers.get("host") ??
-      requestUrl.host,
-    origin: request.headers.get("origin"),
-    token:
-      request.headers.get("x-foundry-operator-token") ??
-      cookieValue(cookieHeader, "foundry_operator_token"),
-  });
+export function assertProviderActionAllowed(sessionId: string) {
+  assertProviderRequestAllowed(sessionId);
 }

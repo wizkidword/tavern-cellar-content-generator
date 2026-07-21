@@ -7,9 +7,13 @@ import {
   generateOpportunityIdeasAction,
 } from "@/app/actions";
 import { FoundryNav } from "@/app/foundry-nav";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import { DeleteOpportunityButton } from "@/app/opportunities/delete-opportunity-button";
 import { canDeleteOpportunity } from "@/lib/intelligence/opportunities";
 import { getOpportunityListData, parseScoreReasons } from "@/lib/intelligence/read-models";
+import { requireOperatorPage } from "@/lib/operator-auth";
+
+export const dynamic = "force-dynamic";
 
 type OpportunitiesPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -24,9 +28,11 @@ function statusClassName(status: string) {
 }
 
 export default async function OpportunitiesPage({ searchParams }: OpportunitiesPageProps) {
+  await requireOperatorPage();
   const params = searchParams ? await searchParams : undefined;
   const message = firstValue(params?.message);
   const error = firstValue(params?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(params?.ref));
   const selectedCategoryId = firstValue(params?.categoryId) ?? "";
   const selectedStatus = firstValue(params?.status) ?? "";
   const selectedRisk = firstValue(params?.risk) ?? "";
@@ -44,6 +50,12 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
       <div className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-5 py-6 md:px-8 xl:px-10">
         <FoundryNav />
 
+        {!data.syncHealth.lastSuccessfulFullSync || data.syncHealth.latestRun?.mode === "PUBLIC_ONLY" ? (
+          <section className="message message-error mb-6">
+            Duplicate and opportunity scores are using incomplete WordPress coverage. Run a successful full private sync before relying on them for editorial decisions.
+          </section>
+        ) : null}
+
         <section className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
           <aside className="panel rounded-[2rem] p-6 md:p-8">
             <p className="eyebrow mb-3">New Opportunity</p>
@@ -52,7 +64,7 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
             </h1>
 
             {message ? <p className="message message-success mb-4">{message}</p> : null}
-            {error ? <p className="message message-error mb-4">{error}</p> : null}
+            {error ? <p className="message message-error mb-4">{errorMessage}</p> : null}
 
             <form action={createWordPressCategoryAction} className="mb-6 space-y-4 border-b border-[var(--line)] pb-6">
               <div>
@@ -168,7 +180,9 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
                   <option value="">All statuses</option>
                   <option value="IDEA">Idea</option>
                   <option value="APPROVED">Approved</option>
+                  <option value="GENERATING">Generating</option>
                   <option value="GENERATED">Generated</option>
+                  <option value="GENERATION_FAILED">Generation failed</option>
                   <option value="REJECTED">Rejected</option>
                   <option value="ARCHIVED">Archived</option>
                 </select>

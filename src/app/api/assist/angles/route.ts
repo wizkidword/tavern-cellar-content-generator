@@ -1,37 +1,47 @@
 import { NextResponse } from "next/server";
 
 import { suggestAngles } from "@/lib/content-pipeline";
+import { getAppErrorHttpStatus, reportAppError } from "@/lib/errors/app-error";
 import {
-  assertOperatorAccessForRequest,
-  OperatorAccessError,
+  assertOperatorApiAccess,
+  assertProviderActionAllowed,
+  RateLimitedError,
 } from "@/lib/operator-auth";
+import { angleAssistSchema, parseRequestBody } from "@/lib/validation/schemas";
 
 export async function POST(request: Request) {
   try {
-    assertOperatorAccessForRequest(request);
+    const session = assertOperatorApiAccess(request);
+    assertProviderActionAllowed(session.sid);
 
-    const body = (await request.json()) as {
-      categoryId?: number;
-      primaryKeyword?: string;
-      notes?: string;
-    };
-
-    const categoryId = Number(body.categoryId ?? 0);
-
-    if (!Number.isFinite(categoryId) || categoryId <= 0) {
-      return NextResponse.json({ error: "Pick a category before generating angles." }, { status: 400 });
-    }
+    const body = parseRequestBody(angleAssistSchema, await request.json());
 
     const result = await suggestAngles({
-      categoryId,
-      primaryKeyword: String(body.primaryKeyword ?? ""),
+      categoryId: body.categoryId,
+      primaryKeyword: body.primaryKeyword,
       notes: body.notes,
     });
 
     return NextResponse.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Angle generation failed.";
-    const status = error instanceof OperatorAccessError ? 401 : 500;
-    return NextResponse.json({ error: message }, { status });
+    if (error instanceof RateLimitedError) {
+      return NextResponse.json(
+        { error: { code: error.code, message: error.message } },
+        { status: 429, headers: { "Retry-After": String(error.retryAfterSeconds) } },
+      );
+    }
+
+    const appError = reportAppError(error, "api.assist.angles");
+    return NextResponse.json(
+      {
+        error: {
+          code: appError.code,
+          correlationId: appError.correlationId,
+          message: appError.message,
+          retryable: appError.retryable,
+        },
+      },
+      { status: getAppErrorHttpStatus(appError.code) },
+    );
   }
 }

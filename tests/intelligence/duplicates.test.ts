@@ -47,6 +47,7 @@ test("marks exact same-category coverage as too similar", () => {
   assert.equal(assessment.blockingSimilarity, true);
   assert.equal(assessment.matches[0]?.source, "app");
   assert.equal(assessment.matches[0]?.similarity, 100);
+  assert.match(assessment.matches[0]?.explanation ?? "", /exact title/i);
 });
 
 test("marks adjacent coverage without blocking fresh angles", () => {
@@ -63,6 +64,29 @@ test("marks adjacent coverage without blocking fresh angles", () => {
   assert.equal(assessment.blockingSimilarity, false);
   assert.ok(assessment.matches[0]?.similarity >= 65);
   assert.match(assessment.matches[0]?.reason ?? "", /overlap/i);
+  assert.match(assessment.matches[0]?.explanation ?? "", /shared terms/i);
+});
+
+test("does not treat broad franchise and format terms as enough duplicate evidence", () => {
+  const assessment = assessDuplicateRisk({
+    keyword: "retro games",
+    title: "Retro Games Review",
+    angle: "Platform controls, home computing, and why old game design remains distinctive.",
+    categoryId: 5,
+    localArticles: [
+      {
+        id: "article-broad",
+        source: "app",
+        categoryId: 5,
+        title: "Classic Movie Review",
+        angle: "Cinematic lighting, romantic drama, and the changing language of film performance.",
+        status: "GENERATED",
+      },
+    ],
+    sitePosts: [],
+  });
+
+  assert.equal(assessment.label, "fresh");
 });
 
 test("ignores unrelated categories when assessing topic saturation", () => {

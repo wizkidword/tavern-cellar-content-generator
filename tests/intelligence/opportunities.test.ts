@@ -6,6 +6,7 @@ import {
   buildOpportunityInsight,
   canDeleteOpportunity,
   canGenerateOpportunityDraft,
+  canTransitionOpportunityStatus,
   getOpportunityWorkflowState,
 } from "@/lib/intelligence/opportunities";
 import { parseContentOpportunityIdeasPayload } from "@/lib/openai";
@@ -100,12 +101,37 @@ test("builds generation notes with the opportunity brief and real internal links
   assert.match(notes, /88% confidence/);
 });
 
-test("allows draft generation only from idea or approved opportunities", () => {
-  assert.equal(canGenerateOpportunityDraft("IDEA"), true);
+test("allows draft generation only from explicitly approved opportunities", () => {
+  assert.equal(canGenerateOpportunityDraft("IDEA"), false);
   assert.equal(canGenerateOpportunityDraft("APPROVED"), true);
+  assert.equal(canGenerateOpportunityDraft("GENERATING"), false);
   assert.equal(canGenerateOpportunityDraft("GENERATED"), false);
+  assert.equal(canGenerateOpportunityDraft("GENERATION_FAILED"), false);
   assert.equal(canGenerateOpportunityDraft("REJECTED"), false);
   assert.equal(canGenerateOpportunityDraft("ARCHIVED"), false);
+});
+
+test("allows only lifecycle-safe opportunity status transitions", () => {
+  assert.equal(
+    canTransitionOpportunityStatus({ from: "IDEA", to: "APPROVED", hasGeneratedArticle: false }),
+    true,
+  );
+  assert.equal(
+    canTransitionOpportunityStatus({ from: "APPROVED", to: "APPROVED", hasGeneratedArticle: false }),
+    false,
+  );
+  assert.equal(
+    canTransitionOpportunityStatus({ from: "GENERATION_FAILED", to: "APPROVED", hasGeneratedArticle: false }),
+    true,
+  );
+  assert.equal(
+    canTransitionOpportunityStatus({ from: "GENERATED", to: "APPROVED", hasGeneratedArticle: true }),
+    false,
+  );
+  assert.equal(
+    canTransitionOpportunityStatus({ from: "GENERATED", to: "ARCHIVED", hasGeneratedArticle: true }),
+    true,
+  );
 });
 
 test("allows deleting known opportunity records from the queue", () => {
@@ -131,16 +157,30 @@ test("shows generated opportunities as openable drafts instead of disabled gener
   );
 });
 
-test("keeps idea and approved opportunities ready for draft generation", () => {
+test("keeps approved opportunities ready for draft generation", () => {
   assert.deepEqual(
     getOpportunityWorkflowState({
-      status: "IDEA",
+      status: "APPROVED",
       generatedArticleId: null,
     }),
     {
       mode: "generate_draft",
       message: "This opportunity is ready to generate a draft.",
       canGenerateDraft: true,
+    },
+  );
+});
+
+test("shows failed opportunity generation as an explicit retry state", () => {
+  assert.deepEqual(
+    getOpportunityWorkflowState({
+      status: "GENERATION_FAILED",
+      generatedArticleId: null,
+    }),
+    {
+      mode: "retry_required",
+      message: "The last draft attempt failed. Approve this opportunity again to retry safely.",
+      canGenerateDraft: false,
     },
   );
 });

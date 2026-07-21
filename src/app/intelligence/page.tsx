@@ -2,7 +2,11 @@ import { formatDistanceToNow } from "date-fns";
 
 import { refreshTopicClustersAction, syncWordPressCatalogAction } from "@/app/actions";
 import { FoundryNav } from "@/app/foundry-nav";
+import { getErrorFeedback } from "@/lib/errors/app-error";
 import { getIntelligenceData } from "@/lib/intelligence/read-models";
+import { requireOperatorPage } from "@/lib/operator-auth";
+
+export const dynamic = "force-dynamic";
 
 type IntelligencePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -25,9 +29,11 @@ function formatClusterItemType(value: string) {
 }
 
 export default async function IntelligencePage({ searchParams }: IntelligencePageProps) {
+  await requireOperatorPage();
   const params = searchParams ? await searchParams : undefined;
   const message = firstValue(params?.message);
   const error = firstValue(params?.error);
+  const errorMessage = getErrorFeedback(error, firstValue(params?.ref));
   const intelligence = await getIntelligenceData();
 
   return (
@@ -49,16 +55,21 @@ export default async function IntelligencePage({ searchParams }: IntelligencePag
                   Refresh Topic Clusters
                 </button>
               </form>
-              <form action={syncWordPressCatalogAction}>
+              <form action={syncWordPressCatalogAction.bind(null, "FULL_PRIVATE")}>
                 <button className="action-secondary" type="submit">
-                  Sync WordPress History
+                  Full private sync
+                </button>
+              </form>
+              <form action={syncWordPressCatalogAction.bind(null, "PUBLIC_ONLY")}>
+                <button className="action-secondary" type="submit">
+                  Public-only sync
                 </button>
               </form>
             </div>
           </div>
 
           {message ? <p className="message message-success mt-5">{message}</p> : null}
-          {error ? <p className="message message-error mt-5">{error}</p> : null}
+          {error ? <p className="message message-error mt-5">{errorMessage}</p> : null}
 
           <div className="metric-grid mt-8">
             <div className="metric-card">
@@ -70,12 +81,17 @@ export default async function IntelligencePage({ searchParams }: IntelligencePag
               <p className="metric-number">{intelligence.linkIndex.postsWithLinks}</p>
             </div>
             <div className="metric-card">
-              <p className="eyebrow mb-2">Latest Sync</p>
+              <p className="eyebrow mb-2">Full Private Sync</p>
               <p className="text-xl font-semibold text-[#fff4e1]">
-                {formatSyncTime(intelligence.linkIndex.latestSyncAt)}
+                {formatSyncTime(intelligence.linkIndex.lastSuccessfulFullSyncAt)}
               </p>
               {intelligence.linkIndex.stale ? (
-                <p className="mt-2 text-sm text-[#ffd2c7]">Sync data is older than 24 hours.</p>
+                <p className="mt-2 text-sm text-[#ffd2c7]">No recent successful full private sync.</p>
+              ) : null}
+              {intelligence.linkIndex.latestSyncRun?.mode === "PUBLIC_ONLY" ? (
+                <p className="mt-2 text-sm text-[#ffd2c7]">
+                  The latest run was public-only; it did not confirm missing private content.
+                </p>
               ) : null}
             </div>
           </div>

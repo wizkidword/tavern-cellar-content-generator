@@ -3,7 +3,9 @@ import {
   type ArticleBodyImage,
   ArticleStatus,
   type Category,
+  type Prisma,
 } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 
 import {
   buildArticleBodyImageRequests,
@@ -14,9 +16,14 @@ import {
 import { isActiveAppCategory, sortCategoriesForApp } from "@/lib/category-config";
 import { prisma } from "@/lib/db";
 import { getServerEnv } from "@/lib/env";
+import { AppError, toAppError } from "@/lib/errors/app-error";
 import {
   deleteGeneratedImageAsset,
-  generateFeaturedImageAsset,
+  discardStagedGeneratedImages,
+  generateStagedFeaturedImageAsset,
+  promoteStagedGeneratedImage,
+  type GeneratedImageAsset,
+  type StagedGeneratedImageAsset,
   type FalImageModel,
   type FeaturedImageProvider,
   type OpenAIImageModel,
@@ -27,7 +34,7 @@ import {
 import { analyzeArticleQuality } from "@/lib/intelligence/article-quality";
 import { assessDuplicateRisk } from "@/lib/intelligence/duplicates";
 import {
-  resolveGeneratedInternalLinks,
+  resolveVerifiedInternalLinks,
   type InternalLinkCandidate,
 } from "@/lib/intelligence/internal-links";
 import {
@@ -53,11 +60,24 @@ import {
   syncWordPressCatalog,
 } from "@/lib/wordpress";
 import {
+  claimPublishAttempt,
+  completePublishAttempt,
+  failPublishAttempt,
+  getLatestPublishAttempt,
+  recordPublishAttemptCheckpoint,
+} from "@/lib/publishing/publish-attempts";
+import {
   formatDateTimeLocal,
   pickRandomWordPressScheduleSlot,
 } from "@/lib/random-schedule";
+import { formatDateTimeInWordPressTimeZone } from "@/lib/wordpress-timezone";
+import {
+  parseWordPressCategoryIds,
+  serializeStringArray,
+} from "@/lib/serialized-values";
+import { articleReviewFormSchema, parseFormData } from "@/lib/validation/schemas";
 
-type GenerateArticleRequest = {
+export type GenerateArticleRequest = {
   categoryId: number;
   primaryKeyword: string;
   angle: string;
@@ -68,6 +88,20 @@ type GenerateArticleRequest = {
   falImageModel?: FalImageModel;
   openAiImageModel?: OpenAIImageModel;
   bodyImageCount?: number;
+  generationTelemetry?: {
+    articleId?: string;
+    opportunityId?: string;
+  };
+};
+
+export type PreparedArticleDraft = {
+  data: Prisma.ArticleUncheckedCreateInput;
+  proposedClaims: string[];
+  generateImage: boolean;
+  imageProvider: FeaturedImageProvider;
+  falImageModel: FalImageModel;
+  openAiImageModel: OpenAIImageModel;
+  bodyImageCount: number;
 };
 
 type WordPressPublishMode = "draft" | "publish" | "future";
@@ -118,67 +152,18 @@ function mergeNotes(currentNotes: string | null, extraNote: string) {
   return `${currentNotes}\n\n${extraNote}`;
 }
 
-function imageProviderLabel(provider: FeaturedImageProvider) {
-  return provider === "fal" ? "fal.ai" : "OpenAI";
-}
-
-function errorDetail(error: unknown) {
-  if (!(error instanceof Error)) {
-    return "Unknown image generation error.";
-  }
-
-  const status =
-    "status" in error && typeof error.status === "number"
-      ? `${error.status} `
-      : "";
-  const structuredError = getStructuredFalErrorDetail(error);
-
-  return `${status}${error.message}${structuredError ? `: ${structuredError}` : ""}`.trim();
-}
-
-function getStructuredFalErrorDetail(error: Error) {
-  if (!("body" in error) || !error.body || typeof error.body !== "object") {
-    return null;
-  }
-
-  const detail = "detail" in error.body ? error.body.detail : null;
-
-  if (!Array.isArray(detail) || detail.length === 0) {
-    return null;
-  }
-
-  const firstDetail = detail[0] as {
-    msg?: unknown;
-    type?: unknown;
-  };
-  const message = typeof firstDetail.msg === "string" ? firstDetail.msg : null;
-  const type = typeof firstDetail.type === "string" ? firstDetail.type : null;
-
-  if (message && type) {
-    return `${message} (${type})`;
-  }
-
-  return message ?? type;
-}
-
-export function buildImageGenerationFailureNote(input: {
-  imageType: "Featured image" | "Article body images";
-  provider: FeaturedImageProvider;
-  model?: string | null;
-  error: unknown;
-}) {
-  const model = input.model ? ` using ${input.model}` : "";
-
-  return `${input.imageType} not generated: ${imageProviderLabel(input.provider)}${model} returned ${errorDetail(input.error)}. Draft text was saved; retry image generation from the review page.`;
-}
-
 type ImageRecoveryReason = "failed" | "missing" | "ready";
 
 function imageRecoveryReason(input: {
   notes?: string | null;
   hasImage: boolean;
   failureNeedle: string;
+  state?: string | null;
 }): ImageRecoveryReason {
+  if (input.state === "FAILED" || input.state === "CLEANUP_WARNING") {
+    return "failed";
+  }
+
   if (input.notes?.toLowerCase().includes(input.failureNeedle.toLowerCase())) {
     return "failed";
   }
@@ -194,16 +179,20 @@ export function getArticleImageRecoveryState(input: {
   featuredImagePath?: string | null;
   bodyImageCount: number;
   notes?: string | null;
+  featuredImageState?: string | null;
+  bodyImagesState?: string | null;
 }) {
   const featuredReason = imageRecoveryReason({
     notes: input.notes,
     hasImage: Boolean(input.featuredImagePath),
     failureNeedle: "Featured image not generated:",
+    state: input.featuredImageState,
   });
   const bodyReason = imageRecoveryReason({
     notes: input.notes,
     hasImage: input.bodyImageCount > 0,
     failureNeedle: "Article body images not generated:",
+    state: input.bodyImagesState,
   });
 
   return {
@@ -216,6 +205,26 @@ export function getArticleImageRecoveryState(input: {
       reason: bodyReason,
     },
   };
+}
+
+export function getArticleImageAltWarnings(input: {
+  featuredImageAlt: string;
+  bodyImageAlts: string[];
+}) {
+  const values = [input.featuredImageAlt, ...input.bodyImageAlts].map((value) => value.trim());
+  const warnings: string[] = [];
+
+  if (values.some((value) => !value)) {
+    warnings.push("Every generated image needs concise descriptive alt text.");
+  }
+
+  const nonEmptyValues = values.filter(Boolean).map((value) => value.toLowerCase());
+
+  if (new Set(nonEmptyValues).size !== nonEmptyValues.length) {
+    warnings.push("Some image alt text is repeated. Give each visual its own description.");
+  }
+
+  return warnings;
 }
 
 export function getForcedPublishTimestamp(
@@ -268,20 +277,120 @@ function articleWithBodyImagesInclude() {
   };
 }
 
-async function deleteExistingBodyImages(images: ArticleBodyImage[]) {
-  if (images.length === 0) {
-    return;
+async function cleanupGeneratedImagePaths(paths: string[]) {
+  let cleanupError: unknown = null;
+
+  for (const publicPath of paths) {
+    try {
+      await deleteGeneratedImageAsset(publicPath);
+    } catch (error) {
+      cleanupError ??= error;
+    }
   }
 
-  await prisma.articleBodyImage.deleteMany({
-    where: {
-      id: {
-        in: images.map((image) => image.id),
-      },
+  return cleanupError;
+}
+
+async function recordFeaturedImageFailure(articleId: string, error: unknown) {
+  await prisma.article.update({
+    where: { id: articleId },
+    data: {
+      featuredImageState: "FAILED",
+      featuredImageErrorCode: toAppError(error).code,
+      featuredImageLastAttemptAt: new Date(),
+    },
+  });
+}
+
+async function recordBodyImageFailure(articleId: string, error: unknown) {
+  await prisma.article.update({
+    where: { id: articleId },
+    data: {
+      bodyImagesState: "FAILED",
+      bodyImagesErrorCode: toAppError(error).code,
+      bodyImagesLastAttemptAt: new Date(),
+    },
+  });
+}
+
+async function replaceFeaturedImageForArticle(input: {
+  article: ArticleWithCategoryAndBodyImages;
+  provider: FeaturedImageProvider;
+  falImageModel?: unknown;
+  openAiImageModel?: unknown;
+}) {
+  const operationKey = randomUUID();
+  let staged: StagedGeneratedImageAsset | null = null;
+  let promoted: GeneratedImageAsset | null = null;
+
+  await prisma.article.update({
+    where: { id: input.article.id },
+    data: {
+      featuredImageState: "GENERATING",
+      featuredImageErrorCode: null,
+      featuredImageLastAttemptAt: new Date(),
     },
   });
 
-  await Promise.all(images.map((image) => deleteGeneratedImageAsset(image.publicPath)));
+  try {
+    staged = await generateStagedFeaturedImageAsset(
+      input.article.id,
+      input.article.featuredImagePrompt,
+      operationKey,
+      input.provider,
+      input.falImageModel,
+      input.openAiImageModel,
+    );
+    const finalizedImage = await promoteStagedGeneratedImage(staged);
+    promoted = finalizedImage;
+    const updated = await prisma.$transaction(async (transaction) =>
+      transaction.article.update({
+        where: { id: input.article.id },
+        data: {
+          featuredImagePath: finalizedImage.publicPath,
+          featuredImageMimeType: finalizedImage.mimeType,
+          featuredImageState: "SUCCEEDED",
+          featuredImageErrorCode: null,
+          featuredImageLastAttemptAt: new Date(),
+          openAiImageModel: finalizedImage.imageModel,
+          wpMediaId: null,
+        },
+        include: articleWithBodyImagesInclude(),
+      }),
+    );
+    const cleanupError =
+      input.article.featuredImagePath && input.article.featuredImagePath !== finalizedImage.publicPath
+        ? await cleanupGeneratedImagePaths([input.article.featuredImagePath])
+        : null;
+
+    if (cleanupError) {
+      return prisma.article.update({
+        where: { id: input.article.id },
+        data: {
+          featuredImageState: "CLEANUP_WARNING",
+          featuredImageErrorCode: toAppError(cleanupError).code,
+        },
+        include: articleWithBodyImagesInclude(),
+      });
+    }
+
+    return updated;
+  } catch (error) {
+    if (promoted) {
+      await cleanupGeneratedImagePaths([promoted.publicPath]);
+    }
+
+    if (staged) {
+      try {
+        await discardStagedGeneratedImages([staged]);
+      } catch {
+        // The database still records the provider/filesystem failure for recovery.
+      }
+    }
+
+    await recordFeaturedImageFailure(input.article.id, error);
+    throw error;
+  }
 }
 
 async function generateBodyImagesForArticle(input: {
@@ -293,85 +402,183 @@ async function generateBodyImagesForArticle(input: {
   replaceExisting: boolean;
 }) {
   const count = resolveArticleBodyImageCount(input.count);
-  let article = input.article;
+  const operationKey = randomUUID();
+  const oldImages = input.replaceExisting ? input.article.bodyImages : [];
+  const baseMarkdown = input.replaceExisting
+    ? removeArticleBodyImageMarkdown(input.article.contentMarkdown, oldImages)
+    : input.article.contentMarkdown;
+  const stagedImages: Array<StagedGeneratedImageAsset & {
+    assetKey: string;
+    altText: string;
+    prompt: string;
+    sectionHeading: string;
+    sortOrder: number;
+  }> = [];
+  const promotedImages: Array<GeneratedImageAsset & {
+    assetKey: string;
+    altText: string;
+    prompt: string;
+    sectionHeading: string;
+    sortOrder: number;
+  }> = [];
 
-  if (input.replaceExisting && article.bodyImages.length > 0) {
-    const contentMarkdown = removeArticleBodyImageMarkdown(
-      article.contentMarkdown,
-      article.bodyImages,
-    );
-
-    await deleteExistingBodyImages(article.bodyImages);
-
-    article = await prisma.article.update({
-      where: { id: article.id },
-      data: { contentMarkdown },
-      include: articleWithBodyImagesInclude(),
-    });
-  }
+  await prisma.article.update({
+    where: { id: input.article.id },
+    data: {
+      bodyImagesState: "GENERATING",
+      bodyImagesErrorCode: null,
+      bodyImagesLastAttemptAt: new Date(),
+      bodyImagesOperationKey: operationKey,
+    },
+  });
 
   if (count === 0) {
-    return article;
+    const updated = await prisma.$transaction(async (transaction) => {
+      if (oldImages.length > 0) {
+        await transaction.articleBodyImage.deleteMany({
+          where: { id: { in: oldImages.map((image) => image.id) } },
+        });
+      }
+
+      return transaction.article.update({
+        where: { id: input.article.id },
+        data: {
+          contentMarkdown: baseMarkdown,
+          bodyImagesState: "SUCCEEDED",
+          bodyImagesErrorCode: null,
+          bodyImagesLastAttemptAt: new Date(),
+        },
+        include: articleWithBodyImagesInclude(),
+      });
+    });
+    const cleanupError = await cleanupGeneratedImagePaths(oldImages.map((image) => image.publicPath));
+
+    if (cleanupError) {
+      return prisma.article.update({
+        where: { id: input.article.id },
+        data: {
+          bodyImagesState: "CLEANUP_WARNING",
+          bodyImagesErrorCode: toAppError(cleanupError).code,
+        },
+        include: articleWithBodyImagesInclude(),
+      });
+    }
+
+    return updated;
   }
 
   const requests = buildArticleBodyImageRequests({
-    title: article.title,
-    angle: article.angle,
-    primaryKeyword: article.primaryKeyword,
-    contentMarkdown: article.contentMarkdown,
+    title: input.article.title,
+    angle: input.article.angle,
+    primaryKeyword: input.article.primaryKeyword,
+    contentMarkdown: baseMarkdown,
     count,
   });
-  const images: ArticleBodyImage[] = [];
 
-  for (const request of requests) {
-    const image = await generateFeaturedImageAsset(
-      article.id,
-      request.prompt,
-      input.imageProvider,
-      input.falImageModel,
-      input.openAiImageModel,
+  try {
+    for (const request of requests) {
+      const staged = await generateStagedFeaturedImageAsset(
+        input.article.id,
+        request.prompt,
+        operationKey,
+        input.imageProvider,
+        input.falImageModel,
+        input.openAiImageModel,
+      );
+      stagedImages.push({ ...staged, ...request, assetKey: randomUUID() });
+    }
+
+    for (const staged of stagedImages) {
+      const promoted = await promoteStagedGeneratedImage(staged);
+      promotedImages.push({ ...promoted, ...staged });
+    }
+
+    const contentMarkdown = insertArticleBodyImageMarkdown(
+      baseMarkdown,
+      promotedImages.map((image) => ({
+        assetKey: image.assetKey,
+        altText: image.altText,
+        publicPath: image.publicPath,
+        sectionHeading: image.sectionHeading,
+      })),
     );
-
-    images.push(
-      await prisma.articleBodyImage.create({
-        data: {
-          articleId: article.id,
-          prompt: request.prompt,
-          altText: request.altText,
-          sectionHeading: request.sectionHeading,
-          sortOrder: request.sortOrder,
+    const updated = await prisma.$transaction(async (transaction) => {
+      if (oldImages.length > 0) {
+        await transaction.articleBodyImage.deleteMany({
+          where: { id: { in: oldImages.map((image) => image.id) } },
+        });
+      }
+      await transaction.articleBodyImage.createMany({
+        data: promotedImages.map((image) => ({
+          articleId: input.article.id,
+          assetKey: image.assetKey,
+          prompt: image.prompt,
+          altText: image.altText,
+          sectionHeading: image.sectionHeading,
+          sortOrder: image.sortOrder,
           publicPath: image.publicPath,
           mimeType: image.mimeType,
           imageModel: image.imageModel,
+        })),
+      });
+
+      return transaction.article.update({
+        where: { id: input.article.id },
+        data: {
+          contentMarkdown,
+          bodyImagesState: "SUCCEEDED",
+          bodyImagesErrorCode: null,
+          bodyImagesLastAttemptAt: new Date(),
         },
-      }),
-    );
+        include: articleWithBodyImagesInclude(),
+      });
+    });
+    const cleanupError = await cleanupGeneratedImagePaths(oldImages.map((image) => image.publicPath));
+
+    if (cleanupError) {
+      return prisma.article.update({
+        where: { id: input.article.id },
+        data: {
+          bodyImagesState: "CLEANUP_WARNING",
+          bodyImagesErrorCode: toAppError(cleanupError).code,
+        },
+        include: articleWithBodyImagesInclude(),
+      });
+    }
+
+    return updated;
+  } catch (error) {
+    await cleanupGeneratedImagePaths(promotedImages.map((image) => image.publicPath));
+    try {
+      await discardStagedGeneratedImages(stagedImages);
+    } catch {
+      // The operation failure remains the actionable error even if staging cleanup also fails.
+    }
+    await recordBodyImageFailure(input.article.id, error);
+    throw error;
   }
-
-  const contentMarkdown = insertArticleBodyImageMarkdown(
-    article.contentMarkdown,
-    images.map((image) => ({
-      altText: image.altText,
-      publicPath: image.publicPath,
-      sectionHeading: image.sectionHeading,
-    })),
-  );
-
-  return prisma.article.update({
-    where: { id: article.id },
-    data: { contentMarkdown },
-    include: articleWithBodyImagesInclude(),
-  });
 }
 
 async function ensureLiveHistory() {
-  const [categoryCount, sitePostCount] = await Promise.all([
+  const [categoryCount, sitePostCount, lastSuccessfulFullSync] = await Promise.all([
     prisma.category.count(),
     prisma.sitePost.count(),
+    prisma.wordPressSyncRun.findFirst({
+      where: {
+        mode: "FULL_PRIVATE",
+        state: "SUCCEEDED",
+      },
+      orderBy: { completedAt: "desc" },
+      select: { completedAt: true },
+    }),
   ]);
+  const staleAfterMs = getServerEnv().WORDPRESS_SYNC_STALE_HOURS * 60 * 60 * 1000;
+  const hasFreshFullSync =
+    lastSuccessfulFullSync?.completedAt &&
+    Date.now() - lastSuccessfulFullSync.completedAt.getTime() < staleAfterMs;
 
-  if (categoryCount === 0 || sitePostCount === 0) {
-    await syncWordPressCatalog();
+  if (categoryCount === 0 || sitePostCount === 0 || !hasFreshFullSync) {
+    await syncWordPressCatalog({ mode: "FULL_PRIVATE" });
   }
 }
 
@@ -393,25 +600,8 @@ async function getPlanningCategory(categoryId: number) {
   return category;
 }
 
-function parseRawCategoryIds(rawCategoryIds: string) {
-  try {
-    const parsed = JSON.parse(rawCategoryIds) as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is number => typeof item === "number");
-    }
-  } catch {
-    // Older rows can be plain comma-separated strings.
-  }
-
-  return rawCategoryIds
-    .split(/[^0-9]+/)
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value));
-}
-
 function rawCategoryIdsInclude(rawCategoryIds: string, wpCategoryId: number) {
-  return parseRawCategoryIds(rawCategoryIds).includes(wpCategoryId);
+  return parseWordPressCategoryIds(rawCategoryIds).includes(wpCategoryId);
 }
 
 function sitePostBelongsToCategory(
@@ -434,7 +624,7 @@ function localCategoryIdsForSitePost(
     ids.add(post.primaryCategoryId);
   }
 
-  for (const wpCategoryId of parseRawCategoryIds(post.rawCategoryIds)) {
+  for (const wpCategoryId of parseWordPressCategoryIds(post.rawCategoryIds)) {
     const localId = wpCategoryMap.get(wpCategoryId);
 
     if (localId) {
@@ -501,13 +691,11 @@ async function resolveArticleInternalLinks(input: {
   primaryKeyword: string;
   angle: string;
   brief: string;
-  generatedLinksText: string;
 }) {
-  return resolveGeneratedInternalLinks({
+  return resolveVerifiedInternalLinks({
     keyword: input.primaryKeyword,
     angle: input.angle,
     brief: input.brief,
-    generatedLinksText: input.generatedLinksText,
     categoryId: input.category.id,
     candidates: await getInternalLinkCandidates(),
     categoryFallback: {
@@ -624,7 +812,9 @@ async function findDuplicateCandidates(input: {
   }));
 }
 
-export async function createArticle(request: GenerateArticleRequest) {
+export async function prepareArticleDraft(
+  request: GenerateArticleRequest,
+): Promise<PreparedArticleDraft> {
   const category = await getPlanningCategory(request.categoryId);
   const textModel = resolveOpenAITextModel(request.textModel);
   const imageProvider = resolveFeaturedImageProvider(request.imageProvider);
@@ -657,6 +847,7 @@ export async function createArticle(request: GenerateArticleRequest) {
     notes: request.notes,
     recentTitles,
     textModel,
+    telemetry: request.generationTelemetry,
   });
 
   const canonicalTopicKey = buildCanonicalTopicKey(
@@ -686,7 +877,6 @@ export async function createArticle(request: GenerateArticleRequest) {
     primaryKeyword: generated.primaryKeyword,
     angle: generated.angle,
     brief: [request.notes, generated.excerpt].filter(Boolean).join("\n"),
-    generatedLinksText: generated.internalLinksText,
   });
   const quality = analyzeArticleQuality({
     title: generated.title,
@@ -695,9 +885,10 @@ export async function createArticle(request: GenerateArticleRequest) {
     metaTitle: generated.metaTitle,
     metaDescription: generated.metaDescription,
     internalLinks,
+    categorySlug: category.slug,
   });
 
-  let article = await prisma.article.create({
+  return {
     data: {
       categoryId: category.id,
       title: generated.title,
@@ -726,79 +917,84 @@ export async function createArticle(request: GenerateArticleRequest) {
       qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
       qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
       qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
-      qualityWarnings: JSON.stringify(quality.warnings),
+      qualityWarnings: serializeStringArray(quality.warnings),
     },
+    proposedClaims: Array.from(
+      new Set(generated.claims.map((claim) => claim.trim()).filter(Boolean)),
+    ).slice(0, 8),
+    generateImage: request.generateImage,
+    imageProvider,
+    falImageModel,
+    openAiImageModel,
+    bodyImageCount: resolveArticleBodyImageCount(request.bodyImageCount),
+  };
+}
+
+export async function createArticleRecordFromPreparedDraft(
+  transaction: Prisma.TransactionClient,
+  prepared: PreparedArticleDraft,
+): Promise<ArticleWithCategoryAndBodyImages> {
+  const article = await transaction.article.create({
+    data: prepared.data,
     include: articleWithBodyImagesInclude(),
   });
 
-  if (request.generateImage) {
-    try {
-      const image = await generateFeaturedImageAsset(
-        article.id,
-        article.featuredImagePrompt,
-        imageProvider,
-        falImageModel,
-        openAiImageModel,
-      );
-
-      article = await prisma.article.update({
-        where: { id: article.id },
-        data: {
-          featuredImagePath: image.publicPath,
-          featuredImageMimeType: image.mimeType,
-          openAiImageModel: image.imageModel,
-        },
-        include: articleWithBodyImagesInclude(),
-      });
-    } catch (error) {
-      article = await prisma.article.update({
-        where: { id: article.id },
-        data: {
-          notes: mergeNotes(
-            article.notes,
-            buildImageGenerationFailureNote({
-              imageType: "Featured image",
-              provider: imageProvider,
-              model: imageProvider === "fal" ? falImageModel : openAiImageModel,
-              error,
-            }),
-          ),
-        },
-        include: articleWithBodyImagesInclude(),
-      });
-    }
-  }
-
-  if (resolveArticleBodyImageCount(request.bodyImageCount) > 0) {
-    try {
-      article = await generateBodyImagesForArticle({
-        article,
-        count: request.bodyImageCount,
-        imageProvider,
-        falImageModel,
-        openAiImageModel,
-        replaceExisting: false,
-      });
-    } catch (error) {
-      article = await prisma.article.update({
-        where: { id: article.id },
-        data: {
-          notes: mergeNotes(
-            article.notes,
-            buildImageGenerationFailureNote({
-              imageType: "Article body images",
-              provider: imageProvider,
-              model: imageProvider === "fal" ? falImageModel : openAiImageModel,
-              error,
-            }),
-          ),
-        },
-        include: articleWithBodyImagesInclude(),
-      });
-    }
+  if (prepared.proposedClaims.length > 0) {
+    await transaction.articleClaim.createMany({
+      data: prepared.proposedClaims.map((claim) => ({
+        articleId: article.id,
+        claim,
+      })),
+    });
   }
 
   return article;
+}
+
+export async function finishPreparedArticleDraft(
+  article: ArticleWithCategoryAndBodyImages,
+  prepared: PreparedArticleDraft,
+) {
+  let completedArticle = article;
+
+  if (prepared.generateImage) {
+    try {
+      completedArticle = await replaceFeaturedImageForArticle({
+        article: completedArticle,
+        provider: prepared.imageProvider,
+        falImageModel: prepared.falImageModel,
+        openAiImageModel: prepared.openAiImageModel,
+      });
+    } catch {
+      // The structured failure state is already persisted for the review screen.
+    }
+  }
+
+  if (prepared.bodyImageCount > 0) {
+    try {
+      completedArticle = await generateBodyImagesForArticle({
+        article: completedArticle,
+        count: prepared.bodyImageCount,
+        imageProvider: prepared.imageProvider,
+        falImageModel: prepared.falImageModel,
+        openAiImageModel: prepared.openAiImageModel,
+        replaceExisting: false,
+      });
+    } catch {
+      // The structured failure state is already persisted for the review screen.
+    }
+  }
+
+  return completedArticle;
+}
+
+export async function createArticle(request: GenerateArticleRequest) {
+  const prepared = await prepareArticleDraft(request);
+  const article = await prisma.$transaction((transaction) =>
+    createArticleRecordFromPreparedDraft(transaction, prepared),
+  );
+
+  return finishPreparedArticleDraft(article, prepared);
 }
 
 export async function generateArticleModelComparison(
@@ -835,13 +1031,13 @@ export async function generateArticleModelComparison(
     notes: sourceArticle.notes ?? undefined,
     recentTitles,
     textModel,
+    telemetry: { articleId: sourceArticle.id },
   });
   const internalLinks = await resolveArticleInternalLinks({
     category: sourceArticle.category,
     primaryKeyword: generated.primaryKeyword,
     angle: generated.angle,
     brief: [sourceArticle.notes, generated.excerpt].filter(Boolean).join("\n"),
-    generatedLinksText: generated.internalLinksText,
   });
   const quality = analyzeArticleQuality({
     title: generated.title,
@@ -850,16 +1046,11 @@ export async function generateArticleModelComparison(
     metaTitle: generated.metaTitle,
     metaDescription: generated.metaDescription,
     internalLinks,
+    categorySlug: sourceArticle.category.slug,
   });
 
-  return prisma.articleModelComparison.upsert({
-    where: {
-      sourceArticleId_openAiTextModel: {
-        sourceArticleId: sourceArticle.id,
-        openAiTextModel: generated.textModel,
-      },
-    },
-    create: {
+  return prisma.articleModelComparison.create({
+    data: {
       sourceArticleId: sourceArticle.id,
       openAiTextModel: generated.textModel,
       title: generated.title,
@@ -882,30 +1073,7 @@ export async function generateArticleModelComparison(
       qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
       qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
       qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
-      qualityWarnings: JSON.stringify(quality.warnings),
-    },
-    update: {
-      title: generated.title,
-      angle: generated.angle,
-      primaryKeyword: generated.primaryKeyword,
-      slug: slugify(generated.slug || generated.title),
-      contentMarkdown: generated.contentMarkdown.trim(),
-      metaTitle: generated.metaTitle.trim(),
-      metaDescription: generated.metaDescription.trim(),
-      excerpt: generated.excerpt.trim(),
-      tags: generated.tagsText,
-      internalLinks,
-      featuredImagePrompt: generated.featuredImagePrompt.trim(),
-      featuredImageAlt: generated.featuredImageAlt.trim(),
-      qualityWordCount: quality.wordCount,
-      qualityHeadingCount: quality.headingCount,
-      qualityMetaTitleLength: quality.metaTitleLength,
-      qualityMetaDescriptionLength: quality.metaDescriptionLength,
-      qualityInternalLinkCount: quality.internalLinkCount,
-      qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
-      qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
-      qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
-      qualityWarnings: JSON.stringify(quality.warnings),
+      qualityWarnings: serializeStringArray(quality.warnings),
     },
   });
 }
@@ -945,13 +1113,7 @@ export async function suggestAngles(input: {
   });
 }
 
-function readString(formData: FormData, key: string) {
-  return String(formData.get(key) ?? "").trim();
-}
-
-function readOptionalSchedule(formData: FormData, key: string) {
-  const value = readString(formData, key);
-
+function readOptionalSchedule(value: string) {
   if (!value) {
     return {
       date: null,
@@ -985,6 +1147,20 @@ function readOptionalSchedule(formData: FormData, key: string) {
   };
 }
 
+async function getLatestWordPressSiteTimezone() {
+  const syncRun = await prisma.wordPressSyncRun.findFirst({
+    where: {
+      mode: "FULL_PRIVATE",
+      state: "SUCCEEDED",
+      siteTimezone: { not: null },
+    },
+    orderBy: { completedAt: "desc" },
+    select: { siteTimezone: true },
+  });
+
+  return syncRun?.siteTimezone ?? null;
+}
+
 function ensureFutureSchedule<T extends {
   scheduledFor: Date | null;
   scheduledForLocal: string | null;
@@ -1002,21 +1178,19 @@ function ensureFutureSchedule<T extends {
 }
 
 export async function saveArticleReview(articleId: string, formData: FormData) {
-  const categoryId = Number(readString(formData, "categoryId"));
-  const title = readString(formData, "title");
-  const angle = readString(formData, "angle");
-  const primaryKeyword = readString(formData, "primaryKeyword");
-  const slug = slugify(readString(formData, "slug") || title);
-  const tags = splitListInput(readString(formData, "tags")).join(", ");
-  const internalLinks = splitListInput(readString(formData, "internalLinks")).join("\n");
-  const notes = readString(formData, "notes");
-  const metaTitle = readString(formData, "metaTitle");
-  const metaDescription = readString(formData, "metaDescription");
-  const excerpt = readString(formData, "excerpt");
-  const featuredImagePrompt = readString(formData, "featuredImagePrompt");
-  const featuredImageAlt = readString(formData, "featuredImageAlt");
-  const contentMarkdown = readString(formData, "contentMarkdown");
-  const schedule = readOptionalSchedule(formData, "scheduledFor");
+  const input = parseFormData(articleReviewFormSchema, formData);
+  const { categoryId, title, angle, primaryKeyword, notes, metaTitle, metaDescription, excerpt } = input;
+  const slug = slugify(input.slug || title);
+  const tags = splitListInput(input.tags).join(", ");
+  const internalLinks = splitListInput(input.internalLinks).join("\n");
+  const featuredImagePrompt = input.featuredImagePrompt;
+  const featuredImageAlt = input.featuredImageAlt;
+  const contentMarkdown = input.contentMarkdown;
+  const schedule = readOptionalSchedule(input.scheduledFor);
+  const wordPressTimezone = schedule.date ? await getLatestWordPressSiteTimezone() : null;
+  const wordPressScheduleTarget = schedule.date
+    ? formatDateTimeInWordPressTimeZone(schedule.date, wordPressTimezone) ?? schedule.localValue
+    : null;
   const quality = analyzeArticleQuality({
     title,
     primaryKeyword,
@@ -1056,7 +1230,8 @@ export async function saveArticleReview(articleId: string, formData: FormData) {
       featuredImageAlt,
       contentMarkdown,
       scheduledFor: schedule.date,
-      scheduledForLocal: schedule.localValue,
+      scheduledForLocal: wordPressScheduleTarget,
+      scheduledForTimezone: schedule.date ? wordPressTimezone : null,
       status: ArticleStatus.READY_FOR_REVIEW,
       qualityWordCount: quality.wordCount,
       qualityHeadingCount: quality.headingCount,
@@ -1066,53 +1241,121 @@ export async function saveArticleReview(articleId: string, formData: FormData) {
       qualityFocusKeyphraseInTitle: quality.focusKeyphraseInTitle,
       qualityFocusKeyphraseInOpening: quality.focusKeyphraseInOpening,
       qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
-      qualityWarnings: JSON.stringify(quality.warnings),
+      qualityWarnings: serializeStringArray(quality.warnings),
     },
     include: articleWithBodyImagesInclude(),
   });
 }
 
 export async function regenerateFeaturedImage(articleId: string, formData: FormData) {
+  const input = parseFormData(articleReviewFormSchema, formData);
   const article = await saveArticleReview(articleId, formData);
-  const image = await generateFeaturedImageAsset(
-    article.id,
-    article.featuredImagePrompt,
-    formData.get("imageProvider"),
-    formData.get("falImageModel"),
-    formData.get("openAiImageModel"),
-  );
-
-  const updated = await prisma.article.update({
-    where: { id: article.id },
-    data: {
-      featuredImagePath: image.publicPath,
-      featuredImageMimeType: image.mimeType,
-      openAiImageModel: image.imageModel,
-      wpMediaId: null,
-    },
-    include: articleWithBodyImagesInclude(),
+  return replaceFeaturedImageForArticle({
+    article,
+    provider: resolveFeaturedImageProvider(input.imageProvider),
+    falImageModel: input.falImageModel,
+    openAiImageModel: input.openAiImageModel,
   });
-
-  if (article.featuredImagePath && article.featuredImagePath !== image.publicPath) {
-    await deleteGeneratedImageAsset(article.featuredImagePath);
-  }
-
-  return updated;
 }
 
 export async function regenerateArticleBodyImages(articleId: string, formData: FormData) {
+  const input = parseFormData(articleReviewFormSchema, formData);
   const article = await saveArticleReview(articleId, formData);
 
   return generateBodyImagesForArticle({
     article,
-    count: formData.get("bodyImageCount"),
-    imageProvider: resolveFeaturedImageProvider(
-      formData.get("bodyImageProvider") ?? formData.get("imageProvider"),
-    ),
-    falImageModel: formData.get("bodyImageFalModel") ?? formData.get("falImageModel"),
-    openAiImageModel: formData.get("bodyOpenAiImageModel") ?? formData.get("openAiImageModel"),
+    count: input.bodyImageCount,
+    imageProvider: resolveFeaturedImageProvider(input.bodyImageProvider ?? input.imageProvider),
+    falImageModel: input.bodyImageFalModel ?? input.falImageModel,
+    openAiImageModel: input.bodyOpenAiImageModel ?? input.openAiImageModel,
     replaceExisting: true,
   });
+}
+
+async function publishSavedArticle(
+  article: ArticleWithCategory & { bodyImages: ArticleBodyImage[] },
+  mode: WordPressPublishMode,
+  previousArticle: {
+    status: ArticleStatus;
+    wpStatus: string | null;
+    wpPostId: number | null;
+  } | null,
+  options: { allowInProgressRecovery?: boolean } = {},
+) {
+  let schedule: { localDateTime: string; utcDateTime: Date } | null = null;
+
+  if (mode === "future") {
+    ensureFutureSchedule(article);
+    schedule = {
+      localDateTime: article.scheduledForLocal,
+      utcDateTime: article.scheduledFor,
+    };
+  }
+
+  const publishAt = getForcedPublishTimestamp(mode, previousArticle);
+  const attempt = await claimPublishAttempt({
+    articleId: article.id,
+    desiredWpStatus: mode,
+    allowInProgressRecovery: options.allowInProgressRecovery,
+  });
+
+  try {
+    const payload = await pushArticleToWordPress(article, mode, schedule, {
+      publishAt,
+      operationKey: attempt.operationKey,
+      allowPlaceholderCreation: !attempt.preventPlaceholderCreation,
+      progress: {
+        onPostIdentified: async (post) => {
+          await recordPublishAttemptCheckpoint({
+            articleId: article.id,
+            operationKey: attempt.operationKey,
+            checkpoint: "POST_IDENTIFIED",
+            wpPostId: post.id,
+          });
+        },
+        onMediaComplete: async (post) => {
+          await recordPublishAttemptCheckpoint({
+            articleId: article.id,
+            operationKey: attempt.operationKey,
+            checkpoint: "MEDIA_COMPLETE",
+            wpPostId: post.id,
+          });
+        },
+        onContentComplete: async (post) => {
+          await recordPublishAttemptCheckpoint({
+            articleId: article.id,
+            operationKey: attempt.operationKey,
+            checkpoint: "CONTENT_COMPLETE",
+            wpPostId: post.id,
+          });
+        },
+      },
+    });
+    const notes = payload.yoastMetaApplied
+      ? article.notes
+      : mergeNotes(
+          article.notes,
+          "Yoast SEO REST bridge not detected on WordPress. Install the companion plugin from this repo to sync focus keyphrase, SEO title, and meta description automatically.",
+        );
+    const status = resolveArticleStatusFromWordPress(mode, payload.status);
+
+    return completePublishAttempt({
+      articleId: article.id,
+      operationKey: attempt.operationKey,
+      wpPostId: payload.id,
+      wpStatus: payload.status,
+      articleStatus: status,
+      publishedAt: status === ArticleStatus.PUBLISHED ? new Date() : article.publishedAt,
+      notes,
+      warningCode: payload.yoastMetaApplied ? null : "WP_YOAST_NOT_APPLIED",
+    });
+  } catch (error) {
+    throw await failPublishAttempt({
+      articleId: article.id,
+      operationKey: attempt.operationKey,
+      error,
+    });
+  }
 }
 
 export async function publishArticle(
@@ -1129,43 +1372,47 @@ export async function publishArticle(
     },
   });
   const article = await saveArticleReview(articleId, formData);
-  let schedule: { localDateTime: string; utcDateTime: Date } | null = null;
 
-  if (mode === "future") {
-    ensureFutureSchedule(article);
-    schedule = {
-      localDateTime: article.scheduledForLocal,
-      utcDateTime: article.scheduledFor,
-    };
+  return publishSavedArticle(article, mode, previousArticle);
+}
+
+export async function reconcileArticlePublish(articleId: string) {
+  const latestAttempt = await getLatestPublishAttempt(articleId);
+
+  if (!latestAttempt) {
+    throw new AppError("PUBLISH_STATE_CONFLICT");
   }
 
-  const publishAt = getForcedPublishTimestamp(mode, previousArticle);
-  const payload = await pushArticleToWordPress(article, mode, schedule, { publishAt });
-  const notes = payload.yoastMetaApplied
-    ? article.notes
-    : mergeNotes(
-        article.notes,
-        "Yoast SEO REST bridge not detected on WordPress. Install the companion plugin from this repo to sync focus keyphrase, SEO title, and meta description automatically.",
-      );
+  if (!["draft", "publish", "future"].includes(latestAttempt.desiredWpStatus)) {
+    throw new AppError("PUBLISH_STATE_CONFLICT");
+  }
 
-  const status = resolveArticleStatusFromWordPress(mode, payload.status);
-
-  return prisma.article.update({
-    where: { id: article.id },
-    data: {
-      wpPostId: payload.id,
-      wpStatus: payload.status,
-      status,
-      notes,
-      publishedAt: status === ArticleStatus.PUBLISHED ? new Date() : article.publishedAt,
-    },
-    include: {
-      category: true,
-      bodyImages: {
-        orderBy: { sortOrder: "asc" },
-      },
-    },
+  const article = await prisma.article.findUnique({
+    where: { id: articleId },
+    include: articleWithBodyImagesInclude(),
   });
+
+  if (!article) {
+    throw new AppError("OPERATION_FAILED");
+  }
+
+  const recoverableState = ["FAILED", "UNCERTAIN"].includes(latestAttempt.state);
+  const interruptedInProgressOperation = article.publishState === "IN_PROGRESS";
+
+  if (!recoverableState && !interruptedInProgressOperation) {
+    throw new AppError("PUBLISH_STATE_CONFLICT");
+  }
+
+  return publishSavedArticle(
+    article,
+    latestAttempt.desiredWpStatus as WordPressPublishMode,
+    {
+      status: article.status,
+      wpStatus: article.wpStatus,
+      wpPostId: article.wpPostId,
+    },
+    { allowInProgressRecovery: interruptedInProgressOperation },
+  );
 }
 
 export async function scheduleArticleRandomly(articleId: string, formData: FormData) {
@@ -1204,8 +1451,15 @@ export async function getArticleById(articleId: string) {
       modelComparisons: {
         orderBy: { updatedAt: "desc" },
       },
+      publishAttempts: {
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+      },
       bodyImages: {
         orderBy: { sortOrder: "asc" },
+      },
+      claims: {
+        orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
       },
     },
   });
@@ -1241,7 +1495,19 @@ export async function getArticleComparisonData(articleId: string) {
 }
 
 export async function getDashboardData() {
-  const [allCategories, articles, sitePostCount, articleCount] = await Promise.all([
+  const [
+    allCategories,
+    articles,
+    sitePostCount,
+    articleCount,
+    latestSyncRun,
+    lastPrivateSync,
+    lastSuccessfulFullSync,
+    lastPublicOnlySync,
+    lastFailedSync,
+    stalePostCount,
+    staleCategoryCount,
+  ] = await Promise.all([
     prisma.category.findMany({
       include: {
         _count: {
@@ -1261,6 +1527,30 @@ export async function getDashboardData() {
     }),
     prisma.sitePost.count(),
     prisma.article.count(),
+    prisma.wordPressSyncRun.findFirst({
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: { mode: "FULL_PRIVATE" },
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: {
+        mode: "FULL_PRIVATE",
+        state: "SUCCEEDED",
+      },
+      orderBy: { completedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: { mode: "PUBLIC_ONLY" },
+      orderBy: { completedAt: "desc" },
+    }),
+    prisma.wordPressSyncRun.findFirst({
+      where: { state: "FAILED" },
+      orderBy: { completedAt: "desc" },
+    }),
+    prisma.sitePost.count({ where: { isStale: true } }),
+    prisma.category.count({ where: { isStale: true } }),
   ]);
 
   const categories = sortCategoriesForApp(
@@ -1272,5 +1562,14 @@ export async function getDashboardData() {
     articles,
     sitePostCount,
     articleCount,
+    syncHealth: {
+      latestRun: latestSyncRun,
+      lastPrivateSync,
+      lastSuccessfulFullSync,
+      lastPublicOnlySync,
+      lastFailedSync,
+      stalePostCount,
+      staleCategoryCount,
+    },
   };
 }

@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { AppError } from "@/lib/errors/app-error";
 import {
   buildWordPressPostContentHtml,
   buildWordPressPostTimingFields,
   createWordPressCategory,
+  findWordPressPostByOperationKey,
   parseWordPressScheduledDate,
   pushArticleToWordPress,
 } from "@/lib/wordpress";
@@ -21,11 +23,11 @@ test("places the uploaded featured image at the top of the WordPress post conten
     },
   });
 
-  assert.ok(html.startsWith("<!-- wp:image"));
-  assert.match(html, /"id":42/);
+  assert.ok(html.trimStart().startsWith('<figure class="wp-block-image size-full">'));
+  assert.match(html, /class="wp-image-42"/);
   assert.match(html, /src="https:\/\/taverncellar\.test\/wp-content\/uploads\/hero\.png"/);
   assert.match(html, /alt="A neon tavern sign &amp; &quot;cellar&quot; doorway"/);
-  assert.ok(html.indexOf("<!-- wp:image") < html.indexOf("<h2>Opening</h2>"));
+  assert.ok(html.indexOf("wp-image-42") < html.indexOf("<h2>Opening</h2>"));
 });
 
 test("leaves WordPress post content unchanged when there is no featured image URL", async () => {
@@ -62,7 +64,7 @@ test("replaces generated body image markdown with uploaded WordPress media block
     ],
   });
 
-  assert.match(html, /"id":77/);
+  assert.match(html, /class="wp-image-77"/);
   assert.match(html, /src="https:\/\/taverncellar\.test\/wp-content\/uploads\/body-image\.png"/);
   assert.doesNotMatch(html, /src="\/generated\/body-image\.png"/);
   assert.ok(html.indexOf("<h2>Opening</h2>") < html.indexOf("wp-image-77"));
@@ -114,7 +116,231 @@ test("ignores invalid WordPress scheduled date values", () => {
   );
 });
 
-test("summarizes HTML media upload failures without leaking the whole page", async () => {
+test("creates one draft placeholder and then updates that same post", async () => {
+  const originalFetch = global.fetch;
+  const originalWordPressUrl = process.env.WORDPRESS_URL;
+  const originalWordPressUsername = process.env.WORDPRESS_USERNAME;
+  const originalWordPressPassword = process.env.WORDPRESS_APP_PASSWORD;
+  const calls: Array<{ url: string; body?: Record<string, unknown> }> = [];
+  const checkpoints: string[] = [];
+
+  process.env.WORDPRESS_URL = "https://taverncellar.test";
+  process.env.WORDPRESS_USERNAME = "editor";
+  process.env.WORDPRESS_APP_PASSWORD = "app password";
+  global.fetch = (async (url, init) => {
+    const requestUrl = String(url);
+    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
+    calls.push({ url: requestUrl, body });
+
+    if (requestUrl.includes("/wp-json/tavern-cellar/v1/publish-attempt/")) {
+      return new Response(JSON.stringify({ code: "tavern_cellar_publish_attempt_not_found" }), {
+        status: 404,
+      });
+    }
+
+    if (requestUrl.endsWith("/wp-json/wp/v2/posts")) {
+      return new Response(JSON.stringify({ id: 902, status: "draft" }), { status: 201 });
+    }
+
+    if (requestUrl.endsWith("/wp-json/wp/v2/posts/902")) {
+      return new Response(JSON.stringify({ id: 902, status: "publish" }), { status: 200 });
+    }
+
+    if (requestUrl.includes("/wp-json/wp/v2/posts/902?context=edit")) {
+      return new Response("", { status: 404 });
+    }
+
+    throw new Error(`Unexpected WordPress request: ${requestUrl}`);
+  }) as typeof fetch;
+
+  try {
+    const payload = await pushArticleToWordPress(
+      {
+        id: "placeholder-article",
+        title: "Recoverable Publish",
+        slug: "recoverable-publish",
+        contentMarkdown: "## Opening\n\nBody copy.",
+        excerpt: "Body copy.",
+        tags: "",
+        metaTitle: "Recoverable Publish",
+        metaDescription: "Body copy.",
+        primaryKeyword: "recoverable publish",
+        featuredImagePath: null,
+        featuredImageMimeType: null,
+        featuredImageAlt: "",
+        wpMediaId: null,
+        wpPostId: null,
+        category: { wpCategoryId: 12 },
+        bodyImages: [],
+      } as never,
+      "publish",
+      null,
+      {
+        operationKey: "publish-operation-key-0001",
+        progress: {
+          onPostIdentified: async () => {
+            checkpoints.push("POST_IDENTIFIED");
+          },
+          onMediaComplete: async () => {
+            checkpoints.push("MEDIA_COMPLETE");
+          },
+          onContentComplete: async () => {
+            checkpoints.push("CONTENT_COMPLETE");
+          },
+        },
+      },
+    );
+
+    const createCalls = calls.filter((call) => call.url.endsWith("/wp-json/wp/v2/posts"));
+    const finalUpdate = calls.find((call) => call.url.endsWith("/wp-json/wp/v2/posts/902"));
+
+    assert.equal(createCalls.length, 1);
+    assert.deepEqual(createCalls[0]?.body, {
+      title: "Recoverable Publish",
+      slug: "recoverable-publish",
+      status: "draft",
+      meta: { _tavern_cellar_publish_operation_key: "publish-operation-key-0001" },
+    });
+    assert.equal(finalUpdate?.body?.status, "publish");
+    assert.equal(payload.id, 902);
+    assert.deepEqual(checkpoints, ["POST_IDENTIFIED", "MEDIA_COMPLETE", "CONTENT_COMPLETE"]);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.WORDPRESS_URL = originalWordPressUrl;
+    process.env.WORDPRESS_USERNAME = originalWordPressUsername;
+    process.env.WORDPRESS_APP_PASSWORD = originalWordPressPassword;
+  }
+});
+
+test("reconciles a known operation key before retrying the final post update", async () => {
+  const originalFetch = global.fetch;
+  const originalWordPressUrl = process.env.WORDPRESS_URL;
+  const originalWordPressUsername = process.env.WORDPRESS_USERNAME;
+  const originalWordPressPassword = process.env.WORDPRESS_APP_PASSWORD;
+  const calls: string[] = [];
+
+  process.env.WORDPRESS_URL = "https://taverncellar.test";
+  process.env.WORDPRESS_USERNAME = "editor";
+  process.env.WORDPRESS_APP_PASSWORD = "app password";
+  global.fetch = (async (url) => {
+    const requestUrl = String(url);
+    calls.push(requestUrl);
+
+    if (requestUrl.includes("/wp-json/tavern-cellar/v1/publish-attempt/")) {
+      return new Response(JSON.stringify({ id: 903, status: "draft", link: "https://taverncellar.test/?p=903" }), {
+        status: 200,
+      });
+    }
+
+    if (requestUrl.endsWith("/wp-json/wp/v2/posts/903")) {
+      return new Response(JSON.stringify({ id: 903, status: "draft" }), { status: 200 });
+    }
+
+    if (requestUrl.includes("/wp-json/wp/v2/posts/903?context=edit")) {
+      return new Response("", { status: 404 });
+    }
+
+    throw new Error(`Unexpected WordPress request: ${requestUrl}`);
+  }) as typeof fetch;
+
+  try {
+    const reconciled = await findWordPressPostByOperationKey("publish-operation-key-0002");
+    assert.equal(reconciled?.id, 903);
+
+    await pushArticleToWordPress(
+      {
+        id: "retry-article",
+        title: "Recovered Draft",
+        slug: "recovered-draft",
+        contentMarkdown: "## Opening\n\nBody copy.",
+        excerpt: "Body copy.",
+        tags: "",
+        metaTitle: "Recovered Draft",
+        metaDescription: "Body copy.",
+        primaryKeyword: "recovered draft",
+        featuredImagePath: null,
+        featuredImageMimeType: null,
+        featuredImageAlt: "",
+        wpMediaId: null,
+        wpPostId: null,
+        category: { wpCategoryId: 12 },
+        bodyImages: [],
+      } as never,
+      "draft",
+      null,
+      { operationKey: "publish-operation-key-0002" },
+    );
+
+    assert.equal(calls.filter((url) => url.endsWith("/wp-json/wp/v2/posts")).length, 0);
+    assert.ok(calls.some((url) => url.endsWith("/wp-json/wp/v2/posts/903")));
+  } finally {
+    global.fetch = originalFetch;
+    process.env.WORDPRESS_URL = originalWordPressUrl;
+    process.env.WORDPRESS_USERNAME = originalWordPressUsername;
+    process.env.WORDPRESS_APP_PASSWORD = originalWordPressPassword;
+  }
+});
+
+test("does not create a second placeholder when an uncertain operation cannot be reconciled", async () => {
+  const originalFetch = global.fetch;
+  const originalWordPressUrl = process.env.WORDPRESS_URL;
+  const originalWordPressUsername = process.env.WORDPRESS_USERNAME;
+  const originalWordPressPassword = process.env.WORDPRESS_APP_PASSWORD;
+  const calls: string[] = [];
+
+  process.env.WORDPRESS_URL = "https://taverncellar.test";
+  process.env.WORDPRESS_USERNAME = "editor";
+  process.env.WORDPRESS_APP_PASSWORD = "app password";
+  global.fetch = (async (url) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ code: "tavern_cellar_publish_attempt_not_found" }), {
+      status: 404,
+    });
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () =>
+        pushArticleToWordPress(
+          {
+            id: "uncertain-retry-article",
+            title: "Uncertain Retry",
+            slug: "uncertain-retry",
+            contentMarkdown: "## Opening\n\nBody copy.",
+            excerpt: "Body copy.",
+            tags: "",
+            metaTitle: "Uncertain Retry",
+            metaDescription: "Body copy.",
+            primaryKeyword: "uncertain retry",
+            featuredImagePath: null,
+            featuredImageMimeType: null,
+            featuredImageAlt: "",
+            wpMediaId: null,
+            wpPostId: null,
+            category: { wpCategoryId: 12 },
+            bodyImages: [],
+          } as never,
+          "draft",
+          null,
+          {
+            operationKey: "publish-operation-key-0003",
+            allowPlaceholderCreation: false,
+          },
+        ),
+      (error) => error instanceof AppError && error.code === "WP_WRITE_UNCERTAIN",
+    );
+
+    assert.equal(calls.length, 1);
+    assert.match(calls[0] ?? "", /\/wp-json\/tavern-cellar\/v1\/publish-attempt\//);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.WORDPRESS_URL = originalWordPressUrl;
+    process.env.WORDPRESS_USERNAME = originalWordPressUsername;
+    process.env.WORDPRESS_APP_PASSWORD = originalWordPressPassword;
+  }
+});
+
+test("maps HTML media upload failures to a stable error without leaking the response", async () => {
   const originalFetch = global.fetch;
   const originalWordPressUrl = process.env.WORDPRESS_URL;
   const originalWordPressUsername = process.env.WORDPRESS_USERNAME;
@@ -177,11 +403,10 @@ test("summarizes HTML media upload failures without leaking the whole page", asy
           },
         ),
       (error) => {
-        assert.ok(error instanceof Error);
-        assert.match(error.message, /Media upload failed: 403 Forbidden/);
-        assert.match(error.message, /HTML error page/i);
+        assert.ok(error instanceof AppError);
+        assert.equal(error.code, "WP_RESPONSE_INVALID");
         assert.doesNotMatch(error.message, /<!DOCTYPE|<html|Security plugin response/i);
-        assert.ok(error.message.length < 360);
+        assert.equal(error.message, "WordPress could not complete that request.");
         return true;
       },
     );
