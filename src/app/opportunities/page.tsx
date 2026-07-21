@@ -41,6 +41,7 @@ function generatedArticleState(
 
   if (article.status === "PUBLISHED" || article.wpStatus?.toLowerCase() === "publish") {
     return {
+      filterValue: "PUBLISHED",
       label: "Published on WordPress",
       link: article.livePostLink,
       tone: "status-published",
@@ -49,6 +50,7 @@ function generatedArticleState(
 
   if (article.status === "SCHEDULED" || article.wpStatus?.toLowerCase() === "future") {
     return {
+      filterValue: "SCHEDULED",
       label: "Scheduled in WordPress",
       link: null,
       tone: "status-scheduled",
@@ -56,6 +58,7 @@ function generatedArticleState(
   }
 
   return {
+    filterValue: "DRAFT",
     label: "Foundry draft ready",
     link: null,
     tone: "status-wp_draft",
@@ -70,14 +73,18 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
   const errorMessage = getErrorFeedback(error, firstValue(params?.ref));
   const selectedCategoryId = firstValue(params?.categoryId) ?? "";
   const selectedStatus = firstValue(params?.status) ?? "";
+  const selectedPublicationState = firstValue(params?.publicationState) ?? "";
   const selectedRisk = firstValue(params?.risk) ?? "";
   const data = await getOpportunityListData();
   const opportunities = data.opportunities.filter((opportunity) => {
     const categoryMatches = !selectedCategoryId || String(opportunity.categoryId) === selectedCategoryId;
     const statusMatches = !selectedStatus || opportunity.status === selectedStatus;
+    const publicationMatches =
+      !selectedPublicationState ||
+      generatedArticleState(opportunity.generatedArticle)?.filterValue === selectedPublicationState;
     const riskMatches = !selectedRisk || opportunity.duplicateRiskLabel === selectedRisk;
 
-    return categoryMatches && statusMatches && riskMatches;
+    return categoryMatches && statusMatches && publicationMatches && riskMatches;
   });
 
   return (
@@ -212,7 +219,7 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
                   ))}
                 </select>
                 <select className="field field-compact" name="status" defaultValue={selectedStatus}>
-                  <option value="">All statuses</option>
+                  <option value="">All opportunity statuses</option>
                   <option value="IDEA">Idea</option>
                   <option value="APPROVED">Approved</option>
                   <option value="GENERATING">Generating</option>
@@ -220,6 +227,16 @@ export default async function OpportunitiesPage({ searchParams }: OpportunitiesP
                   <option value="GENERATION_FAILED">Generation failed</option>
                   <option value="REJECTED">Rejected</option>
                   <option value="ARCHIVED">Archived</option>
+                </select>
+                <select
+                  className="field field-compact"
+                  name="publicationState"
+                  defaultValue={selectedPublicationState}
+                >
+                  <option value="">All publication states</option>
+                  <option value="PUBLISHED">Published on WordPress</option>
+                  <option value="SCHEDULED">Scheduled in WordPress</option>
+                  <option value="DRAFT">Foundry draft ready</option>
                 </select>
                 <select className="field field-compact" name="risk" defaultValue={selectedRisk}>
                   <option value="">All risks</option>
