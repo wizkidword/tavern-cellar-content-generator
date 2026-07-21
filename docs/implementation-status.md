@@ -120,6 +120,11 @@ Status: complete on 2026-07-21.
 - **Schema and migration notes:** No schema or migration change was needed. The link insertion test is included in the fresh-and-legacy SQLite rehearsal because it verifies the server-side target lookup and write.
 - **Verification:** `npm test` has 140 passing tests. TypeScript, ESLint, Prisma validation, migration status/diff, the fresh-and-legacy SQLite rehearsal, and the Next.js production build pass.
 
+## Release automation and live verification
+
+- **CI:** Added GitHub Actions checks for application validation, WordPress plugin PHP syntax, secret scanning, and production dependency auditing. The workflow runs on pull requests, pushes, and manual dispatch.
+- **Live smoke test:** Added a confirmation-gated `npm run release:smoke` command and [release-smoke.md](release-smoke.md). It creates one clearly labeled WordPress draft, verifies operation-key lookup and repeat-update behavior, and confirms that a full private sync records the draft. It never publishes public content, generates AI text, or creates images.
+
 ## Deferred by design
 
 - Product-feature changes: later phases after Phase 9.

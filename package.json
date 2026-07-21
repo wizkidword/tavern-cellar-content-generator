@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test": "node scripts/run-tests.mjs",
     "test:db": "node scripts/verify-migrations.mjs",
+    "release:smoke": "node --import tsx scripts/release-smoke.ts",
     "typecheck": "tsc --noEmit",
     "db:backup": "node scripts/backup-database.mjs",
     "db:migrate": "node scripts/migrate-database.mjs",
