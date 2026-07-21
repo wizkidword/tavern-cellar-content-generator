@@ -500,7 +500,7 @@ export async function regenerateFeaturedImageAction(articleId: string, formData:
 
 export async function sourceFeaturedImageFromWebAction(
   articleId: string,
-  source: "wikimedia" | "openverse",
+  source: "wikimedia" | "openverse" | "web",
   assetId: string,
 ) {
   let targetPath = `/articles/${articleId}`;
@@ -514,7 +514,7 @@ export async function sourceFeaturedImageFromWebAction(
     revalidatePath(`/articles/${article.id}`);
     revalidatePath(`/articles/${article.id}/preflight`);
     targetPath = buildRedirect(`/articles/${article.id}`, {
-      message: "Web image saved to the draft with its source and license details.",
+      message: "Web image saved. You can send this draft to WordPress for testing.",
     });
   } catch (error) {
     targetPath = buildRedirect(`/articles/${articleId}`, {

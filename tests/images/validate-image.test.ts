@@ -17,6 +17,17 @@ test("accepts a real, supported image after inspecting its bytes", async () => {
   assert.equal(result.byteLength, png.byteLength);
 });
 
+test("accepts an AVIF image when Sharp identifies its container as HEIF", async () => {
+  const avif = await sharp({
+    create: { width: 20, height: 20, channels: 3, background: "#5a3b22" },
+  })
+    .avif()
+    .toBuffer();
+
+  const result = await validateImageBuffer(avif);
+  assert.equal(result.byteLength, avif.byteLength);
+});
+
 test("rejects a non-image response even if an upstream provider returned bytes", async () => {
   await assert.rejects(
     () => validateImageBuffer(Buffer.from("<html>not an image</html>")),

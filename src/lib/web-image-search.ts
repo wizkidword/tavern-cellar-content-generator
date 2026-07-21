@@ -4,12 +4,18 @@ import {
   type OpenverseImageCandidate,
 } from "@/lib/openverse";
 import {
+  downloadBroadWebImage,
+  searchBroadWebImages,
+  type BroadWebImageCandidate,
+} from "@/lib/broad-web-image-search";
+import {
   downloadLicensedWikimediaImage,
   searchLicensedWikimediaImages,
   type WikimediaImageCandidate,
 } from "@/lib/wikimedia-commons";
 
-export type WebImageSource = "wikimedia" | "openverse";
+export type WebImageSource = "wikimedia" | "openverse" | "web";
+export type WebImageSearchScope = "licensed" | "broad";
 
 export type WebImageCandidate = {
   assetId: string;
@@ -37,6 +43,24 @@ function fromWikimedia(image: WikimediaImageCandidate): WebImageCandidate {
     licenseUrl: image.licenseUrl,
     providerLabel: "Wikimedia Commons",
     source: "wikimedia",
+    thumbnailHeight: image.thumbnailHeight,
+    thumbnailUrl: image.thumbnailUrl,
+    thumbnailWidth: image.thumbnailWidth,
+    title: image.title,
+    width: image.width,
+  };
+}
+
+function fromBroadWeb(image: BroadWebImageCandidate): WebImageCandidate {
+  return {
+    assetId: image.assetId,
+    attribution: image.attribution,
+    descriptionUrl: image.descriptionUrl,
+    height: image.height,
+    license: "Draft-testing reference",
+    licenseUrl: null,
+    providerLabel: image.providerLabel,
+    source: "web",
     thumbnailHeight: image.thumbnailHeight,
     thumbnailUrl: image.thumbnailUrl,
     thumbnailWidth: image.thumbnailWidth,
@@ -74,36 +98,53 @@ function orderForFeaturedImage(left: WebImageCandidate, right: WebImageCandidate
   return score(right) - score(left);
 }
 
-/**
- * Searches two independent, openly licensed catalogs. A temporary failure in
- * one catalog does not hide good results from the other.
- */
-export async function searchLicensedWebImages(query: string) {
-  const [openverse, wikimedia] = await Promise.allSettled([
+export async function searchWebImages(
+  query: string,
+  scope: WebImageSearchScope = "broad",
+) {
+  const [broadResult, openverseResult, wikimediaResult] = await Promise.allSettled([
+    scope === "broad" ? searchBroadWebImages(query) : Promise.resolve(null),
     searchLicensedOpenverseImages(query),
     searchLicensedWikimediaImages(query),
-  ]);
+  ] as const);
   const images: WebImageCandidate[] = [];
 
-  if (openverse.status === "fulfilled") {
-    images.push(...openverse.value.map(fromOpenverse));
+  if (broadResult.status === "fulfilled" && broadResult.value) {
+    images.push(...broadResult.value.map(fromBroadWeb));
   }
 
-  if (wikimedia.status === "fulfilled") {
-    images.push(...wikimedia.value.map(fromWikimedia));
+  if (openverseResult.status === "fulfilled") {
+    images.push(...openverseResult.value.map(fromOpenverse));
   }
 
-  if (images.length === 0 && openverse.status === "rejected" && wikimedia.status === "rejected") {
-    throw openverse.reason;
+  if (wikimediaResult.status === "fulfilled") {
+    images.push(...wikimediaResult.value.map(fromWikimedia));
   }
 
-  return images.sort(orderForFeaturedImage).slice(0, 20);
+  const failures = [broadResult, openverseResult, wikimediaResult].filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+
+  if (images.length === 0 && failures.length === (scope === "broad" ? 3 : 2)) {
+    throw failures[0]?.reason;
+  }
+
+  return scope === "broad" ? images.slice(0, 30) : images.sort(orderForFeaturedImage).slice(0, 20);
 }
 
-export async function downloadLicensedWebImage(input: {
+export async function downloadWebImage(input: {
   assetId: string;
   source: WebImageSource;
 }) {
+  if (input.source === "web") {
+    const downloaded = await downloadBroadWebImage(input.assetId);
+
+    return {
+      buffer: downloaded.buffer,
+      candidate: fromBroadWeb(downloaded.candidate),
+    };
+  }
+
   if (input.source === "openverse") {
     const downloaded = await downloadLicensedOpenverseImage(input.assetId);
 

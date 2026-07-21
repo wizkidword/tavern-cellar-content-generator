@@ -4,7 +4,9 @@ import { AppError } from "@/lib/errors/app-error";
 
 export const MAX_REMOTE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 8_192;
-const acceptedFormats = new Set(["avif", "jpeg", "png", "webp"]);
+// Sharp reports AVIF files as the HEIF container format, even when their media
+// type is image/avif. The image is normalized to PNG before WordPress upload.
+const acceptedFormats = new Set(["avif", "heif", "jpeg", "png", "webp"]);
 
 export async function readSafeRemoteImage(response: Response) {
   const declaredLength = Number(response.headers.get("content-length") ?? "0");

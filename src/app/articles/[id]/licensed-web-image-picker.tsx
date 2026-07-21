@@ -27,6 +27,7 @@ export function LicensedWebImagePicker({
 }: LicensedWebImagePickerProps) {
   const [query, setQuery] = useState(defaultQuery);
   const [images, setImages] = useState<WebImageCandidate[]>([]);
+  const [scope, setScope] = useState<"broad" | "licensed">("broad");
   const [feedback, setFeedback] = useState("");
   const [isSearching, startSearch] = useTransition();
   const [isSaving, startSaving] = useTransition();
@@ -47,7 +48,7 @@ export function LicensedWebImagePicker({
         const response = await fetch("/api/featured-images/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: normalizedQuery }),
+          body: JSON.stringify({ query: normalizedQuery, scope }),
         });
         const payload = (await response.json()) as SearchResponse;
 
@@ -58,15 +59,19 @@ export function LicensedWebImagePicker({
         setImages(payload.images ?? []);
         setFeedback(
           payload.images?.length
-            ? "Choose an image below. Its source and license stay attached to the draft for review."
-            : "No reusable images matched that search. Try a simpler or broader phrase.",
+            ? scope === "broad"
+              ? "Choose a high-quality web result for this draft. You can still send the draft to WordPress for testing."
+              : "Choose an openly licensed image below. Its source and license stay attached to the draft."
+            : scope === "broad"
+              ? "No high-quality web images matched that search. Try a simpler or broader phrase."
+              : "No reusable images matched that search. Try a simpler or broader phrase.",
         );
       } catch (error) {
         setImages([]);
         setFeedback(error instanceof Error ? error.message : "The image search could not complete.");
       }
     });
-  }, [query]);
+  }, [query, scope]);
 
   useEffect(() => {
     if (autoSearch && !hasAutoSearched.current) {
@@ -84,11 +89,40 @@ export function LicensedWebImagePicker({
 
   return (
     <div className="rounded-[1.4rem] border border-[var(--line)] bg-black/10 p-4">
-      <p className="text-sm font-semibold text-[#fff4e1]">Find a stronger real image for this draft</p>
+      <p className="text-sm font-semibold text-[#fff4e1]">Find a real image for this draft</p>
       <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-        Search Wikimedia Commons plus Openverse&apos;s Creative Commons and public-domain catalog, including
-        Flickr. Save one as a draft reference, then confirm its rights or replace it before publishing.
+        High-quality web testing searches are broad and may include images without reusable rights. You can send
+        them to WordPress drafts for testing; replace or clear them before public publishing.
       </p>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#c99a54]/50 bg-[#2b2116] px-3 py-3 text-xs leading-5 text-[#f2dfbd]">
+          <input
+            checked={scope === "broad"}
+            className="mt-1 size-4 accent-[var(--accent)]"
+            name="webImageScope"
+            onChange={() => setScope("broad")}
+            type="radio"
+          />
+          <span>
+            <span className="block font-semibold text-[#fff4e1]">High-quality web results</span>
+            Broad results for private draft testing.
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[var(--line)] bg-black/10 px-3 py-3 text-xs leading-5 text-[var(--muted)]">
+          <input
+            checked={scope === "licensed"}
+            className="mt-1 size-4 accent-[var(--accent)]"
+            name="webImageScope"
+            onChange={() => setScope("licensed")}
+            type="radio"
+          />
+          <span>
+            <span className="block font-semibold text-[#fff4e1]">Reusable sources only</span>
+            Wikimedia Commons and Openverse/Flickr.
+          </span>
+        </label>
+      </div>
 
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         <input
@@ -109,7 +143,7 @@ export function LicensedWebImagePicker({
           onClick={search}
           type="button"
         >
-          {isSearching ? "Searching..." : "Find web images"}
+          {isSearching ? "Searching..." : scope === "broad" ? "Find high-quality images" : "Find reusable images"}
         </button>
       </div>
 

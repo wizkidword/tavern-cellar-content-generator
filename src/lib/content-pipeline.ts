@@ -32,7 +32,7 @@ import {
   resolveFeaturedImageProvider,
   resolveOpenAIImageModel,
 } from "@/lib/featured-image";
-import { downloadLicensedWebImage, type WebImageSource } from "@/lib/web-image-search";
+import { downloadWebImage, type WebImageSource } from "@/lib/web-image-search";
 import { analyzeArticleQuality } from "@/lib/intelligence/article-quality";
 import { assessDuplicateRisk } from "@/lib/intelligence/duplicates";
 import {
@@ -425,7 +425,7 @@ export async function sourceFeaturedImageFromWeb(
   });
 
   try {
-    const sourcedImage = await downloadLicensedWebImage(selection);
+    const sourcedImage = await downloadWebImage(selection);
     staged = await stageFeaturedImageBuffer({
       articleId: article.id,
       buffer: sourcedImage.buffer,

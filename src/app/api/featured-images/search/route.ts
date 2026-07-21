@@ -3,13 +3,13 @@ import { NextResponse } from "next/server";
 import { getAppErrorHttpStatus, reportAppError } from "@/lib/errors/app-error";
 import { assertOperatorApiAccess } from "@/lib/operator-auth";
 import { parseRequestBody, webImageSearchSchema } from "@/lib/validation/schemas";
-import { searchLicensedWebImages } from "@/lib/web-image-search";
+import { searchWebImages } from "@/lib/web-image-search";
 
 export async function POST(request: Request) {
   try {
     assertOperatorApiAccess(request);
     const body = parseRequestBody(webImageSearchSchema, await request.json());
-    const images = await searchLicensedWebImages(body.query);
+    const images = await searchWebImages(body.query, body.scope);
 
     return NextResponse.json({ images });
   } catch (error) {

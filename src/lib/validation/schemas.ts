@@ -124,12 +124,23 @@ export const angleAssistSchema = keywordAssistSchema.extend({
 
 export const webImageSearchSchema = z.object({
   query: requiredText(180).min(3),
+  scope: z.enum(["licensed", "broad"]).default("broad"),
 });
 
-export const webImageSelectionSchema = z.object({
-  assetId: z.string().trim().min(6).max(300),
-  source: z.enum(["wikimedia", "openverse"]),
-});
+export const webImageSelectionSchema = z.discriminatedUnion("source", [
+  z.object({
+    assetId: z.string().trim().min(6).max(300),
+    source: z.literal("wikimedia"),
+  }),
+  z.object({
+    assetId: z.string().trim().min(6).max(300),
+    source: z.literal("openverse"),
+  }),
+  z.object({
+    assetId: z.string().trim().min(24).max(4_096),
+    source: z.literal("web"),
+  }),
+]);
 
 function formDataRecord(formData: FormData) {
   return Object.fromEntries(
