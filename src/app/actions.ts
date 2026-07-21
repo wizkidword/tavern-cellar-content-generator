@@ -58,8 +58,11 @@ function getErrorMessage(error: unknown) {
   return reportAppError(error, "server_action");
 }
 
-export async function syncWordPressCatalogAction(mode: "FULL_PRIVATE" | "PUBLIC_ONLY" = "FULL_PRIVATE") {
-  let targetPath = "/";
+async function runWordPressCatalogSync(
+  mode: "FULL_PRIVATE" | "PUBLIC_ONLY",
+  targetPage: "/" | "/operations",
+) {
+  let targetPath: string = targetPage;
 
   try {
     await assertOperatorActionAccess();
@@ -67,7 +70,8 @@ export async function syncWordPressCatalogAction(mode: "FULL_PRIVATE" | "PUBLIC_
     revalidatePath("/");
     revalidatePath("/intelligence");
     revalidatePath("/opportunities");
-    targetPath = buildRedirect("/", {
+    revalidatePath("/operations");
+    targetPath = buildRedirect(targetPage, {
       message:
         mode === "FULL_PRIVATE"
           ? `Completed a full private sync: ${result.categoryCount} categories and ${result.postCount} posts.`
@@ -76,12 +80,29 @@ export async function syncWordPressCatalogAction(mode: "FULL_PRIVATE" | "PUBLIC_
   } catch (error) {
     revalidatePath("/");
     revalidatePath("/intelligence");
-    targetPath = buildRedirect("/", {
+    revalidatePath("/operations");
+    targetPath = buildRedirect(targetPage, {
       error: getErrorMessage(error),
     });
   }
 
   redirect(targetPath);
+}
+
+export async function syncWordPressCatalogAction(
+  mode: "FULL_PRIVATE" | "PUBLIC_ONLY" = "FULL_PRIVATE",
+  _formData?: FormData,
+) {
+  void _formData;
+  await runWordPressCatalogSync(mode, "/");
+}
+
+export async function syncWordPressCatalogFromOperationsAction(
+  mode: "FULL_PRIVATE" | "PUBLIC_ONLY",
+  _formData?: FormData,
+) {
+  void _formData;
+  await runWordPressCatalogSync(mode, "/operations");
 }
 
 export async function refreshTopicClustersAction() {
@@ -441,24 +462,41 @@ export async function publishNowAction(articleId: string, formData: FormData) {
   redirect(targetPath);
 }
 
-export async function reconcileArticlePublishAction(articleId: string) {
-  let targetPath = `/articles/${articleId}`;
+async function runArticlePublishReconciliation(
+  articleId: string,
+  targetPage: string,
+) {
+  let targetPath: string = targetPage;
 
   try {
     await assertOperatorActionAccess();
     await reconcileArticlePublish(articleId);
     revalidatePath(`/articles/${articleId}`);
     revalidatePath("/");
-    targetPath = buildRedirect(`/articles/${articleId}`, {
+    revalidatePath("/operations");
+    targetPath = buildRedirect(targetPage, {
       message: "Publish recovery completed. The existing WordPress post was reconciled before retrying.",
     });
   } catch (error) {
-    targetPath = buildRedirect(`/articles/${articleId}`, {
+    targetPath = buildRedirect(targetPage, {
       error: getErrorMessage(error),
     });
   }
 
   redirect(targetPath);
+}
+
+export async function reconcileArticlePublishAction(articleId: string, _formData?: FormData) {
+  void _formData;
+  await runArticlePublishReconciliation(articleId, `/articles/${articleId}`);
+}
+
+export async function reconcileArticlePublishFromOperationsAction(
+  articleId: string,
+  _formData?: FormData,
+) {
+  void _formData;
+  await runArticlePublishReconciliation(articleId, "/operations");
 }
 
 export async function scheduleArticleAction(articleId: string, formData: FormData) {

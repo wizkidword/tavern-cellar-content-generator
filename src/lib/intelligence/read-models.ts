@@ -1,4 +1,4 @@
-import { ArticleStatus } from "@prisma/client";
+import { ArticleStatus, ImageOperationState } from "@prisma/client";
 
 import { isActiveAppCategory, sortCategoriesForApp } from "@/lib/category-config";
 import { prisma } from "@/lib/db";
@@ -181,4 +181,89 @@ export async function getCalendarData() {
     },
     orderBy: [{ scheduledFor: "asc" }, { updatedAt: "desc" }],
   });
+}
+
+export async function getOperationsData() {
+  const [publishAttempts, syncRuns, generationRuns, imageOperations] = await Promise.all([
+    prisma.publishAttempt.findMany({
+      include: {
+        article: {
+          select: {
+            id: true,
+            title: true,
+            publishState: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 24,
+    }),
+    prisma.wordPressSyncRun.findMany({
+      orderBy: { startedAt: "desc" },
+      take: 16,
+    }),
+    prisma.generationRun.findMany({
+      include: {
+        article: {
+          select: {
+            id: true,
+            title: true,
+          },
+        },
+        opportunity: {
+          select: {
+            id: true,
+            primaryKeyword: true,
+            angle: true,
+          },
+        },
+      },
+      orderBy: { startedAt: "desc" },
+      take: 24,
+    }),
+    prisma.article.findMany({
+      where: {
+        OR: [
+          {
+            featuredImageState: {
+              in: [
+                ImageOperationState.GENERATING,
+                ImageOperationState.FAILED,
+                ImageOperationState.CLEANUP_WARNING,
+              ],
+            },
+          },
+          {
+            bodyImagesState: {
+              in: [
+                ImageOperationState.GENERATING,
+                ImageOperationState.FAILED,
+                ImageOperationState.CLEANUP_WARNING,
+              ],
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        title: true,
+        featuredImageState: true,
+        featuredImageErrorCode: true,
+        featuredImageLastAttemptAt: true,
+        bodyImagesState: true,
+        bodyImagesErrorCode: true,
+        bodyImagesLastAttemptAt: true,
+        updatedAt: true,
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 24,
+    }),
+  ]);
+
+  return {
+    publishAttempts,
+    syncRuns,
+    generationRuns,
+    imageOperations,
+  };
 }

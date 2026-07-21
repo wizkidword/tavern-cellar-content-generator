@@ -686,6 +686,28 @@ button:disabled {
   text-align: left;
 }
 
+.operation-card {
+  border: 1px solid var(--line);
+  border-radius: 1.35rem;
+  background: rgba(0, 0, 0, 0.12);
+  padding: 1rem;
+}
+
+.operation-card a:not(.action-primary):not(.action-secondary) {
+  color: #fff4e1;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 213, 142, 0.38);
+  text-underline-offset: 0.18em;
+}
+
+.empty-operation-state {
+  border: 1px dashed var(--line);
+  border-radius: 1.35rem;
+  color: var(--muted);
+  padding: 1.25rem;
+  text-align: center;
+}
+
 @media (max-width: 900px) {
   .foundry-nav {
     align-items: stretch;

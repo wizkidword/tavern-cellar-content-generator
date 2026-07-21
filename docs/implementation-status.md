@@ -111,7 +111,9 @@ Status: in progress on 2026-07-21.
 
 - **UX-01 (complete):** Added an authenticated, saved-data publish preflight at `/articles/[id]/preflight`. Operators can select draft, publish-now, or scheduled intent and inspect the exact saved title, slug, excerpt, focus phrase, Yoast fields, category, tags, desired status, schedule/timezone, media plan, resolved links, warnings, and blockers before invoking WordPress.
 - **UX-01 (complete):** The preflight uses the same Markdown renderer and HTML sanitizer as WordPress publishing, then shows both the rendered result and the exact sanitized HTML. It clearly distinguishes local generated image paths from WordPress-assigned media URLs, which cannot exist until WordPress uploads the files.
-- **Verification:** Added preflight rendering/blocker tests. The suite now has 135 passing tests; TypeScript, ESLint, and the Next.js production build pass. UX-02 through UX-04 remain next in this phase.
+- **UX-02 (complete):** Added the authenticated `/operations` recovery center and navigation entry. It reads the durable publish attempts, WordPress sync runs, image-operation state, and AI generation telemetry already stored by Foundry, with the related item, state, start/finish time, checkpoint/progress, safe error/reference, and appropriate recovery route.
+- **UX-02 (complete):** Failed or uncertain publishes can reconcile/retry from the center; failed/degraded syncs can start a full private retry there. Both actions return to the center with a result message. Image and AI records link to the source article/opportunity, where their existing guarded retry controls remain authoritative.
+- **Verification:** The suite remains at 135 passing tests; TypeScript, ESLint, and the Next.js production build pass. UX-03 and UX-04 remain next in this phase.
 
 ## Deferred by design
 
