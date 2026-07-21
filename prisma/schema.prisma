@@ -15,6 +15,12 @@ enum ArticleStatus {
   SCHEDULED
 }
 
+enum ArticleClaimState {
+  OPEN
+  VERIFIED
+  DISMISSED
+}
+
 enum PublishOperationState {
   IDLE
   IN_PROGRESS
@@ -192,6 +198,7 @@ model Article {
   updatedAt                              DateTime      @updatedAt
 
   category                Category                 @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  claims                  ArticleClaim[]
   bodyImages              ArticleBodyImage[]
   contentOpportunities    ContentOpportunity[]
   modelComparisons        ArticleModelComparison[]
@@ -206,6 +213,22 @@ model Article {
   @@index([normalizedTitle])
   @@index([normalizedKeyword])
   @@index([publishState])
+}
+
+model ArticleClaim {
+  id        String            @id @default(cuid())
+  articleId String
+  claim     String
+  status    ArticleClaimState @default(OPEN)
+  sourceUrl String?
+  note      String?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId, status])
+  @@index([status, updatedAt])
 }
 
 model PublishAttempt {

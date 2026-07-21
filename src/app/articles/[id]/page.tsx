@@ -10,6 +10,8 @@ import {
   reconcileArticlePublishAction,
   regenerateArticleBodyImagesAction,
   regenerateFeaturedImageAction,
+  createArticleClaimAction,
+  saveArticleClaimAction,
   saveArticleReviewAction,
   scheduleArticleAction,
   sendWordPressDraftAction,
@@ -795,6 +797,134 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
             </section>
           </aside>
         </form>
+
+        <section className="panel mt-6 rounded-[2rem] p-6 md:p-8">
+          <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="eyebrow mb-3">Claims to verify</p>
+              <h2 className="display text-3xl font-semibold text-[#fff1d7]">Editorial fact check</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
+                Keep only claims that need a source or editorial decision. A generated suggestion is never
+                verified automatically.
+              </p>
+            </div>
+            <span className="rounded-full border border-[var(--line)] px-4 py-2 text-sm text-[var(--muted)]">
+              {article.claims.filter((claim) => claim.status === "OPEN").length} open
+            </span>
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+            <div className="space-y-4">
+              {article.claims.length > 0 ? (
+                article.claims.map((claim) => (
+                  <form
+                    action={saveArticleClaimAction.bind(null, article.id, claim.id)}
+                    className="rounded-[1.4rem] border border-[var(--line)] bg-black/10 p-4"
+                    key={claim.id}
+                  >
+                    <div className="grid gap-4">
+                      <div>
+                        <label className="label" htmlFor={`claim-${claim.id}`}>
+                          Claim
+                        </label>
+                        <textarea
+                          className="field min-h-24"
+                          defaultValue={claim.claim}
+                          id={`claim-${claim.id}`}
+                          name="claim"
+                          required
+                        />
+                      </div>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                          <label className="label" htmlFor={`claim-status-${claim.id}`}>
+                            State
+                          </label>
+                          <select
+                            className="field"
+                            defaultValue={claim.status}
+                            id={`claim-status-${claim.id}`}
+                            name="status"
+                          >
+                            <option value="OPEN">Open — needs verification</option>
+                            <option value="VERIFIED">Verified</option>
+                            <option value="DISMISSED">Dismissed</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="label" htmlFor={`claim-source-${claim.id}`}>
+                            Source URL (optional)
+                          </label>
+                          <input
+                            className="field"
+                            defaultValue={claim.sourceUrl ?? ""}
+                            id={`claim-source-${claim.id}`}
+                            name="sourceUrl"
+                            placeholder="https://…"
+                            type="url"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="label" htmlFor={`claim-note-${claim.id}`}>
+                          Editorial note (optional)
+                        </label>
+                        <textarea
+                          className="field min-h-20"
+                          defaultValue={claim.note ?? ""}
+                          id={`claim-note-${claim.id}`}
+                          name="note"
+                        />
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-xs text-[var(--muted)]">
+                          Last updated {format(claim.updatedAt, "PPp")}.
+                        </p>
+                        <button className="action-secondary" type="submit">
+                          Save Claim
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                ))
+              ) : (
+                <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-4 py-10 text-center text-[var(--muted)]">
+                  No claims are waiting for review.
+                </div>
+              )}
+            </div>
+
+            <form action={createArticleClaimAction.bind(null, article.id)} className="rounded-[1.5rem] border border-[var(--line)] bg-black/10 p-5">
+              <p className="eyebrow mb-3">Add a claim</p>
+              <p className="mb-5 text-sm leading-6 text-[var(--muted)]">
+                Use this for a fact, date, number, attribution, or statement that deserves human confirmation.
+              </p>
+              <div className="space-y-4">
+                <div>
+                  <label className="label" htmlFor="new-claim">
+                    Claim
+                  </label>
+                  <textarea className="field min-h-28" id="new-claim" name="claim" required />
+                </div>
+                <div>
+                  <label className="label" htmlFor="new-claim-source">
+                    Source URL (optional)
+                  </label>
+                  <input className="field" id="new-claim-source" name="sourceUrl" placeholder="https://…" type="url" />
+                </div>
+                <div>
+                  <label className="label" htmlFor="new-claim-note">
+                    Editorial note (optional)
+                  </label>
+                  <textarea className="field min-h-24" id="new-claim-note" name="note" />
+                </div>
+                <button className="action-primary w-full" type="submit">
+                  Add Open Claim
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
       </div>
     </main>
   );

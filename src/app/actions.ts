@@ -13,6 +13,7 @@ import {
   saveArticleReview,
   scheduleArticleRandomly,
 } from "@/lib/content-pipeline";
+import { createArticleClaim, updateArticleClaim } from "@/lib/article-claims";
 import {
   createArticleFromOpportunity,
   createOpportunityFromInput,
@@ -28,6 +29,8 @@ import {
 import { AppError, reportAppError } from "@/lib/errors/app-error";
 import {
   articleGenerationSettingsSchema,
+  articleClaimCreateFormSchema,
+  articleClaimUpdateFormSchema,
   articleReviewFormSchema,
   categoryOnlyFormSchema,
   comparisonFormSchema,
@@ -342,6 +345,44 @@ export async function saveArticleReviewAction(articleId: string, formData: FormD
     targetPath = buildRedirect(`/articles/${articleId}`, {
       error: getErrorMessage(error),
     });
+  }
+
+  redirect(targetPath);
+}
+
+export async function createArticleClaimAction(articleId: string, formData: FormData) {
+  const targetPage = `/articles/${articleId}`;
+  let targetPath = targetPage;
+
+  try {
+    await assertOperatorActionAccess();
+    const input = parseFormData(articleClaimCreateFormSchema, formData);
+    await createArticleClaim(articleId, input);
+    revalidatePath(targetPage);
+    targetPath = buildRedirect(targetPage, { message: "Claim added for verification." });
+  } catch (error) {
+    targetPath = buildRedirect(targetPage, { error: getErrorMessage(error) });
+  }
+
+  redirect(targetPath);
+}
+
+export async function saveArticleClaimAction(
+  articleId: string,
+  claimId: string,
+  formData: FormData,
+) {
+  const targetPage = `/articles/${articleId}`;
+  let targetPath = targetPage;
+
+  try {
+    await assertOperatorActionAccess();
+    const input = parseFormData(articleClaimUpdateFormSchema, formData);
+    await updateArticleClaim(articleId, claimId, input);
+    revalidatePath(targetPage);
+    targetPath = buildRedirect(targetPage, { message: "Claim saved." });
+  } catch (error) {
+    targetPath = buildRedirect(targetPage, { error: getErrorMessage(error) });
   }
 
   redirect(targetPath);

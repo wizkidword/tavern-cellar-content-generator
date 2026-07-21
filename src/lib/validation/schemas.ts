@@ -15,6 +15,19 @@ const optionalText = (maximum: number) => text(maximum).default("");
 const bodyImageCount = z.coerce.number().int().min(0).max(4).default(0);
 const enabledCheckbox = z.preprocess((value) => value === "on" || value === "true" || value === true, z.boolean());
 
+function isOptionalHttpUrl(value: string) {
+  if (!value) {
+    return true;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 const imageSettings = {
   imageProvider: z.enum(FEATURED_IMAGE_PROVIDER_IDS),
   falImageModel: z.enum(FAL_IMAGE_MODEL_IDS),
@@ -81,6 +94,19 @@ export const articleReviewFormSchema = z.object({
 
 export const comparisonFormSchema = z.object({
   comparisonModel: z.enum(OPENAI_TEXT_MODEL_IDS),
+});
+
+const articleClaimFields = {
+  claim: requiredText(800).min(12),
+  sourceUrl: text(2_048).refine(isOptionalHttpUrl, "Use a full http or https source URL.").default(""),
+  note: optionalText(2_000),
+};
+
+export const articleClaimCreateFormSchema = z.object(articleClaimFields);
+
+export const articleClaimUpdateFormSchema = z.object({
+  ...articleClaimFields,
+  status: z.enum(["OPEN", "VERIFIED", "DISMISSED"]),
 });
 
 export const keywordAssistSchema = z.object({

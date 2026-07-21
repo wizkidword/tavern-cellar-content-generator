@@ -29,6 +29,7 @@ const articlePayloadSchema = z.object({
   featuredImagePrompt: z.string().min(40),
   featuredImageAlt: z.string().min(10),
   contentMarkdown: z.string().min(1200),
+  claims: z.array(z.string().min(20).max(800)).max(8),
 });
 
 const keywordIdeasSchema = z.object({
@@ -87,6 +88,11 @@ const articleResponseSchema = {
     featuredImagePrompt: { type: "string" },
     featuredImageAlt: { type: "string" },
     contentMarkdown: { type: "string" },
+    claims: {
+      type: "array",
+      maxItems: 8,
+      items: { type: "string" },
+    },
   },
   required: [
     "title",
@@ -100,6 +106,7 @@ const articleResponseSchema = {
     "featuredImagePrompt",
     "featuredImageAlt",
     "contentMarkdown",
+    "claims",
   ],
 } as const;
 
@@ -162,7 +169,7 @@ export type SuggestedContentOpportunityIdeas = {
   textModel: string;
 };
 
-export const ARTICLE_PROMPT_SCHEMA_VERSION = "article-v2-deterministic-links";
+export const ARTICLE_PROMPT_SCHEMA_VERSION = "article-v3-claims-to-verify";
 export const OPPORTUNITY_PROMPT_SCHEMA_VERSION = "opportunity-v2-untrusted-context";
 export const KEYWORD_PROMPT_SCHEMA_VERSION = "keyword-v2-untrusted-context";
 export const ANGLE_PROMPT_SCHEMA_VERSION = "angle-v2-untrusted-context";
@@ -529,7 +536,7 @@ export async function generateArticleDraft(input: GenerateArticleInput): Promise
           {
             type: "input_text",
             text: [
-              "Prompt/schema version: article-v2-deterministic-links.",
+              "Prompt/schema version: article-v3-claims-to-verify.",
               "BEGIN UNTRUSTED EDITORIAL INPUT",
               `Site category: ${input.categoryName} (${input.categorySlug})`,
               `Primary keyword: ${input.primaryKeyword}`,
@@ -557,6 +564,7 @@ export async function generateArticleDraft(input: GenerateArticleInput): Promise
               "Suggested length: 1,300 to 1,900 words.",
               "For tags, return only concise WordPress-ready tag names, not hashtags.",
               "Do not return internal-link topics, slugs, URLs, citations, or link-target fields. The application selects verified internal links after generation.",
+              "For claims, return zero to eight concise factual claims from the draft that a human editor should verify before publishing. Include only claims that name a date, number, historical fact, attribution, or other externally checkable assertion. Do not include source URLs, citations, or verification status. An empty claims list is acceptable.",
               "For the featured image prompt, describe a clean editorial hero image with one dominant focal scene.",
               "For the featured image prompt, avoid exact copyrighted character names, actor names, franchise names, episode titles, studio names, logos, or protected likenesses; describe genre-safe archetypes, costumes, settings, mood, and composition instead.",
               "For featured image alt text, describe the actual visible scene plainly and specifically, avoid vague labels like collage unless the image is truly a collage, and include the focus keyphrase naturally when it fits.",

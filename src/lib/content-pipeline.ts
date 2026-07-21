@@ -96,6 +96,7 @@ export type GenerateArticleRequest = {
 
 export type PreparedArticleDraft = {
   data: Prisma.ArticleUncheckedCreateInput;
+  proposedClaims: string[];
   generateImage: boolean;
   imageProvider: FeaturedImageProvider;
   falImageModel: FalImageModel;
@@ -918,6 +919,9 @@ export async function prepareArticleDraft(
       qualityFocusKeyphraseInMetaDescription: quality.focusKeyphraseInMetaDescription,
       qualityWarnings: serializeStringArray(quality.warnings),
     },
+    proposedClaims: Array.from(
+      new Set(generated.claims.map((claim) => claim.trim()).filter(Boolean)),
+    ).slice(0, 8),
     generateImage: request.generateImage,
     imageProvider,
     falImageModel,
@@ -930,10 +934,21 @@ export async function createArticleRecordFromPreparedDraft(
   transaction: Prisma.TransactionClient,
   prepared: PreparedArticleDraft,
 ): Promise<ArticleWithCategoryAndBodyImages> {
-  return transaction.article.create({
+  const article = await transaction.article.create({
     data: prepared.data,
     include: articleWithBodyImagesInclude(),
   });
+
+  if (prepared.proposedClaims.length > 0) {
+    await transaction.articleClaim.createMany({
+      data: prepared.proposedClaims.map((claim) => ({
+        articleId: article.id,
+        claim,
+      })),
+    });
+  }
+
+  return article;
 }
 
 export async function finishPreparedArticleDraft(
@@ -975,10 +990,9 @@ export async function finishPreparedArticleDraft(
 
 export async function createArticle(request: GenerateArticleRequest) {
   const prepared = await prepareArticleDraft(request);
-  const article = await prisma.article.create({
-    data: prepared.data,
-    include: articleWithBodyImagesInclude(),
-  });
+  const article = await prisma.$transaction((transaction) =>
+    createArticleRecordFromPreparedDraft(transaction, prepared),
+  );
 
   return finishPreparedArticleDraft(article, prepared);
 }
@@ -1443,6 +1457,9 @@ export async function getArticleById(articleId: string) {
       },
       bodyImages: {
         orderBy: { sortOrder: "asc" },
+      },
+      claims: {
+        orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
       },
     },
   });
