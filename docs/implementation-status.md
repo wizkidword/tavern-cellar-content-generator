@@ -107,7 +107,7 @@ Status: complete on 2026-07-21.
 
 ## Phase 9 — operator usability and recovery tools
 
-Status: in progress on 2026-07-21.
+Status: complete on 2026-07-21.
 
 - **UX-01 (complete):** Added an authenticated, saved-data publish preflight at `/articles/[id]/preflight`. Operators can select draft, publish-now, or scheduled intent and inspect the exact saved title, slug, excerpt, focus phrase, Yoast fields, category, tags, desired status, schedule/timezone, media plan, resolved links, warnings, and blockers before invoking WordPress.
 - **UX-01 (complete):** The preflight uses the same Markdown renderer and HTML sanitizer as WordPress publishing, then shows both the rendered result and the exact sanitized HTML. It clearly distinguishes local generated image paths from WordPress-assigned media URLs, which cannot exist until WordPress uploads the files.
@@ -115,7 +115,10 @@ Status: in progress on 2026-07-21.
 - **UX-02 (complete):** Failed or uncertain publishes can reconcile/retry from the center; failed/degraded syncs can start a full private retry there. Both actions return to the center with a result message. Image and AI records link to the source article/opportunity, where their existing guarded retry controls remain authoritative.
 - **UX-03 (complete):** Added durable `ArticleClaim` records with an initial `OPEN` state plus explicit `VERIFIED` and `DISMISSED` states. Claims are scoped to an article, retain optional source and editorial-note fields, and are deleted with their article.
 - **UX-03 (complete):** AI article generation can suggest a small, bounded list of factual claims for review; it never marks them verified or provides a source. The article review page lets an operator add, edit, verify, dismiss, and document each claim without leaving the article.
-- **Verification:** `npm test` has 137 passing tests. TypeScript, ESLint, Prisma validation, migration status/diff, the fresh-and-legacy SQLite migration rehearsal, and the Next.js production build pass. UX-04 remains next in this phase.
+- **UX-04 (complete):** The article review screen now offers deterministic internal-link suggestions from saved WordPress catalog records and known local articles. Every card names the target, anchor, reason, confidence, and exact section boundary where the link will be inserted.
+- **UX-04 (complete):** One click adds a `Further reading` Markdown link to the saved draft and records the target in the existing internal-link reference list. The server re-derives the target from the database instead of accepting a browser-provided URL, blocks duplicate destinations, and warns before linking to unpublished local drafts or non-public WordPress posts.
+- **Schema and migration notes:** No schema or migration change was needed. The link insertion test is included in the fresh-and-legacy SQLite rehearsal because it verifies the server-side target lookup and write.
+- **Verification:** `npm test` has 140 passing tests. TypeScript, ESLint, Prisma validation, migration status/diff, the fresh-and-legacy SQLite rehearsal, and the Next.js production build pass.
 
 ## Deferred by design
 

@@ -14,6 +14,7 @@ import {
   scheduleArticleRandomly,
 } from "@/lib/content-pipeline";
 import { createArticleClaim, updateArticleClaim } from "@/lib/article-claims";
+import { insertArticleInternalLink } from "@/lib/article-internal-links";
 import {
   createArticleFromOpportunity,
   createOpportunityFromInput,
@@ -381,6 +382,30 @@ export async function saveArticleClaimAction(
     await updateArticleClaim(articleId, claimId, input);
     revalidatePath(targetPage);
     targetPath = buildRedirect(targetPage, { message: "Claim saved." });
+  } catch (error) {
+    targetPath = buildRedirect(targetPage, { error: getErrorMessage(error) });
+  }
+
+  redirect(targetPath);
+}
+
+export async function insertArticleInternalLinkAction(
+  articleId: string,
+  targetKey: string,
+  _formData?: FormData,
+) {
+  void _formData;
+  const targetPage = `/articles/${articleId}`;
+  let targetPath = targetPage;
+
+  try {
+    await assertOperatorActionAccess();
+    const article = await insertArticleInternalLink(articleId, targetKey);
+    revalidatePath(targetPage);
+    revalidatePath("/");
+    targetPath = buildRedirect(targetPage, {
+      message: `Inserted an internal link to ${article.internalLinks.split("\n").at(-1) ?? "the selected target"}.`,
+    });
   } catch (error) {
     targetPath = buildRedirect(targetPage, { error: getErrorMessage(error) });
   }

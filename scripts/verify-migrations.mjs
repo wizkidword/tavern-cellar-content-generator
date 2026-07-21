@@ -97,6 +97,11 @@ function verifyFreshInstall() {
     );
     run(
       process.execPath,
+      ["--import", "tsx", "--test", "tests/links/article-link-insertion.integration.ts"],
+      environment,
+    );
+    run(
+      process.execPath,
       ["--import", "tsx", "--test", "tests/sync/wordpress-sync.integration.ts"],
       environment,
     );

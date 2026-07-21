@@ -5,6 +5,7 @@ import { format } from "date-fns";
 
 import {
   generateArticleComparisonAction,
+  insertArticleInternalLinkAction,
   publishNowAction,
   randomScheduleArticleAction,
   reconcileArticlePublishAction,
@@ -18,6 +19,7 @@ import {
 } from "@/app/actions";
 import { PublishActionButton } from "@/app/publish-action-button";
 import { MAX_ARTICLE_BODY_IMAGE_COUNT } from "@/lib/article-body-images";
+import { getArticleInternalLinkSuggestions } from "@/lib/article-internal-links";
 import {
   getArticleById,
   getArticleImageAltWarnings,
@@ -79,7 +81,10 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
     notFound();
   }
 
-  const dashboard = await getDashboardData();
+  const [dashboard, linkSuggestions] = await Promise.all([
+    getDashboardData(),
+    getArticleInternalLinkSuggestions(id),
+  ]);
   const categoryOptions = dashboard.categories.some((category) => category.id === article.categoryId)
     ? dashboard.categories
     : [
@@ -98,6 +103,8 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
   const sourceOpportunity = article.contentOpportunities[0];
   const qualityWarnings = parseArticleQualityWarnings(article.qualityWarnings);
   const comparisonModels = getComparisonCandidateOpenAITextModels(article.openAiTextModel);
+  const availableLinkSuggestions = (linkSuggestions ?? []).filter((suggestion) => !suggestion.alreadyLinked);
+  const existingLinkSuggestions = (linkSuggestions ?? []).filter((suggestion) => suggestion.alreadyLinked);
   const hasComparisons = article.modelComparisons.length > 0;
   const bodyImageDefaultCount = String(article.bodyImages.length || 2);
   const imageRecovery = getArticleImageRecoveryState({
@@ -797,6 +804,80 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
             </section>
           </aside>
         </form>
+
+        <section className="panel mt-6 rounded-[2rem] p-6 md:p-8">
+          <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="eyebrow mb-3">Internal links</p>
+              <h2 className="display text-3xl font-semibold text-[#fff1d7]">Verified link suggestions</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
+                Each target comes from the saved WordPress catalog or another local article. Applying a suggestion
+                updates the saved draft, so save any editor changes first.
+              </p>
+            </div>
+            <span className="rounded-full border border-[var(--line)] px-4 py-2 text-sm text-[var(--muted)]">
+              {availableLinkSuggestions.length} ready
+            </span>
+          </div>
+
+          {availableLinkSuggestions.length > 0 ? (
+            <div className="grid gap-4 xl:grid-cols-2">
+              {availableLinkSuggestions.slice(0, 6).map((suggestion) => (
+                <article
+                  className="rounded-[1.4rem] border border-[var(--line)] bg-black/10 p-5"
+                  key={suggestion.targetKey}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-lg font-semibold text-[#fff1d7]">{suggestion.title}</p>
+                      <p className="mt-1 text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                        {suggestion.targetType === "LOCAL_ARTICLE" ? "Local article" : "WordPress catalog"} · {suggestion.confidence}% match
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-[var(--line)] px-3 py-1 text-xs text-[var(--muted)]">
+                      {suggestion.location}
+                    </span>
+                  </div>
+                  <dl className="mt-4 space-y-2 text-sm leading-6 text-[var(--muted)]">
+                    <div>
+                      <dt className="inline font-medium text-[#fff1d7]">Anchor: </dt>
+                      <dd className="inline">{suggestion.anchor}</dd>
+                    </div>
+                    <div>
+                      <dt className="inline font-medium text-[#fff1d7]">Why: </dt>
+                      <dd className="inline">{suggestion.reason}</dd>
+                    </div>
+                    <div className="break-all">
+                      <dt className="inline font-medium text-[#fff1d7]">Target: </dt>
+                      <dd className="inline">{suggestion.url}</dd>
+                    </div>
+                  </dl>
+                  {suggestion.unpublishedWarning ? (
+                    <p className="mt-4 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm leading-6 text-amber-100">
+                      {suggestion.unpublishedWarning}
+                    </p>
+                  ) : null}
+                  <form action={insertArticleInternalLinkAction.bind(null, article.id, suggestion.targetKey)} className="mt-5">
+                    <button className="action-primary w-full" type="submit">
+                      Insert Link Once
+                    </button>
+                  </form>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] px-4 py-10 text-center text-[var(--muted)]">
+              No safe new internal-link targets match this saved draft yet.
+            </div>
+          )}
+
+          {existingLinkSuggestions.length > 0 ? (
+            <p className="mt-5 text-sm leading-6 text-[var(--muted)]">
+              Already linked in this saved draft: {existingLinkSuggestions.map((suggestion) => suggestion.title).join(", ")}.
+              Duplicate targets are not offered again.
+            </p>
+          ) : null}
+        </section>
 
         <section className="panel mt-6 rounded-[2rem] p-6 md:p-8">
           <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
