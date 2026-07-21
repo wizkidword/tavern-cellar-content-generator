@@ -35,6 +35,7 @@ WORDPRESS_ORIGIN_IP=""
 WORDPRESS_USERNAME="your-wordpress-username"
 WORDPRESS_APP_PASSWORD="your-wordpress-application-password"
 WORDPRESS_SYNC_STALE_HOURS="24"
+FOUNDRY_AUTH_REQUIRED="true"
 FOUNDRY_OPERATOR_TOKEN="replace-with-a-strong-operator-credential"
 SESSION_SECRET="replace-with-at-least-32-random-bytes"
 SESSION_MAX_AGE_HOURS="12"
@@ -51,6 +52,7 @@ Important:
 - For WordPress publishing, use an application password for the account that should create posts.
 - If a public proxy blocks the Foundry server with a browser challenge, set `WORDPRESS_ORIGIN_IP` to the confirmed WordPress origin IP. Foundry will still use `WORDPRESS_URL` for the secure hostname and WordPress host checks; normal site visitors are unaffected.
 - Leaving spaces in the WordPress application password inside `.env` is fine; the app strips them before authenticating.
+- Set `FOUNDRY_AUTH_REQUIRED="false"` only for a trusted Foundry workspace on this computer. It removes the sign-in screen while the included launcher remains bound to `127.0.0.1`.
 - Set `FOUNDRY_OPERATOR_TOKEN` to a unique credential of at least 16 characters. Foundry uses it only on the login page and never stores it in browser-visible state.
 - Set `SESSION_SECRET` to at least 32 random bytes. You can generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
 - `APP_ORIGIN` must match the URL used to open Foundry. The included launcher binds to `127.0.0.1` by default and opens the matching origin.
@@ -68,7 +70,7 @@ npm run dev
 
 Then open `http://127.0.0.1:3000`.
 
-Sign in at `/login` with `FOUNDRY_OPERATOR_TOKEN` after the server starts.
+When `FOUNDRY_AUTH_REQUIRED` is `true`, sign in at `/login` with `FOUNDRY_OPERATOR_TOKEN` after the server starts. When it is `false`, Foundry opens directly to the dashboard.
 
 On Windows, you can also double-click `Launch-Tavern-Cellar-Foundry.bat` from the project folder. It opens the existing local server if one is already running, or prepares the database, starts the server, and opens `http://127.0.0.1:3000`.
 

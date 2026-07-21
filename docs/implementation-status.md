@@ -13,7 +13,7 @@ Status: complete on 2026-07-21.
 Status: complete on 2026-07-21.
 
 - **SEC-01:** Header-based localhost and token authorization has been removed. `Host`, `Origin`, and forwarded headers are never identity inputs.
-- **SEC-02:** `/login` verifies the configured operator credential with a timing-safe comparison, then creates a versioned, HMAC-signed session with a finite expiration. The cookie is `HttpOnly`, `SameSite=Strict`, path-scoped to `/`, and marked `Secure` for HTTPS origins. Logout clears it.
+- **SEC-02:** With the default `FOUNDRY_AUTH_REQUIRED=true`, `/login` verifies the configured operator credential with a timing-safe comparison, then creates a versioned, HMAC-signed session with a finite expiration. The cookie is `HttpOnly`, `SameSite=Strict`, path-scoped to `/`, and marked `Secure` for HTTPS origins. A trusted loopback-only workspace can opt out with `FOUNDRY_AUTH_REQUIRED=false` and opens directly to the dashboard.
 - **SEC-03:** Every application page has a server-side guard before data reads. Next 16 `proxy.ts` provides the early redirect/structured API 401, while all Server Actions and API routes independently verify the session. Provider actions add session- and process-scoped throttles.
 - **SEC-04:** State-changing Server Actions and API requests require the configured exact origin after session validation. Next Server Action `allowedOrigins` is configured from `APP_ORIGIN`.
 - **SEC-05:** Failed login attempts are limited to five per 15 minutes; expensive provider actions have bounded per-session and global fixed windows. No proxy-derived IP header is trusted or used.

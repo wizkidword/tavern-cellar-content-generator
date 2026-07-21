@@ -14,8 +14,13 @@ import {
   clearOperatorSession,
   createOperatorSession,
 } from "@/lib/operator-auth";
+import { isOperatorAuthenticationRequired } from "@/lib/env";
 
 export async function loginOperatorAction(formData: FormData) {
+  if (!isOperatorAuthenticationRequired()) {
+    redirect("/");
+  }
+
   const credential = String(formData.get("operatorToken") ?? "");
   let credentialIsValid = false;
 
@@ -46,6 +51,10 @@ export async function loginOperatorAction(formData: FormData) {
 }
 
 export async function logoutOperatorAction() {
+  if (!isOperatorAuthenticationRequired()) {
+    redirect("/");
+  }
+
   await assertOperatorActionAccess();
   await clearOperatorSession();
   redirect("/login?message=SIGNED_OUT");

@@ -154,6 +154,24 @@ test("proxy redirects unauthenticated page reads and returns structured API auth
   });
 });
 
+test("bypasses the login wall only when local authentication is explicitly disabled", () => {
+  const originalAuthRequired = process.env.FOUNDRY_AUTH_REQUIRED;
+  process.env.FOUNDRY_AUTH_REQUIRED = "false";
+
+  try {
+    const response = proxy(new NextRequest("http://127.0.0.1:3000/"));
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("X-Robots-Tag"), "noindex, nofollow");
+  } finally {
+    if (originalAuthRequired === undefined) {
+      delete process.env.FOUNDRY_AUTH_REQUIRED;
+    } else {
+      process.env.FOUNDRY_AUTH_REQUIRED = originalAuthRequired;
+    }
+  }
+});
+
 test("throttles repeated failures and recovers after the fixed window", () => {
   const limiter = new FixedWindowRateLimiter({ limit: 2, windowMs: 1_000 });
 

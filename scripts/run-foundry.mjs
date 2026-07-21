@@ -25,6 +25,15 @@ if (command !== "dev" && command !== "start") {
     return "127.0.0.1";
   }
 
+  function hasExplicitHostname(args) {
+    return args.some(
+      (argument) =>
+        argument === "--hostname" ||
+        argument === "-H" ||
+        argument.startsWith("--hostname="),
+    );
+  }
+
   function requiresRemoteAuthentication() {
     const bindHostname = hostnameFromArguments(nextArgs);
     const appOrigin = process.env.APP_ORIGIN ?? "http://127.0.0.1:3000";
@@ -64,7 +73,10 @@ if (command !== "dev" && command !== "start") {
 
   if (process.exitCode !== 1 && (!requiresRemoteAuthentication() || hasRequiredOperatorConfiguration())) {
     const nextBin = fileURLToPath(new URL("../node_modules/next/dist/bin/next", import.meta.url));
-    const child = spawn(process.execPath, [nextBin, command, ...nextArgs], {
+    const launchArgs = hasExplicitHostname(nextArgs)
+      ? nextArgs
+      : ["--hostname", "127.0.0.1", ...nextArgs];
+    const child = spawn(process.execPath, [nextBin, command, ...launchArgs], {
       env: process.env,
       stdio: "inherit",
     });

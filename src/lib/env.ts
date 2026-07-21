@@ -34,6 +34,7 @@ const serverEnvSchema = z.object({
   WORDPRESS_USERNAME: z.string().optional(),
   WORDPRESS_APP_PASSWORD: z.string().optional(),
   WORDPRESS_SYNC_STALE_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+  FOUNDRY_AUTH_REQUIRED: z.enum(["true", "false"]).default("true"),
   FOUNDRY_OPERATOR_TOKEN: z.string().optional(),
   SESSION_SECRET: z.string().optional(),
   SESSION_MAX_AGE_HOURS: z.coerce.number().int().min(1).max(168).default(12),
@@ -89,6 +90,7 @@ export function getServerEnv() {
     WORDPRESS_USERNAME: process.env.WORDPRESS_USERNAME,
     WORDPRESS_APP_PASSWORD: process.env.WORDPRESS_APP_PASSWORD,
     WORDPRESS_SYNC_STALE_HOURS: process.env.WORDPRESS_SYNC_STALE_HOURS,
+    FOUNDRY_AUTH_REQUIRED: process.env.FOUNDRY_AUTH_REQUIRED,
     FOUNDRY_OPERATOR_TOKEN: process.env.FOUNDRY_OPERATOR_TOKEN,
     SESSION_SECRET: process.env.SESSION_SECRET,
     SESSION_MAX_AGE_HOURS: process.env.SESSION_MAX_AGE_HOURS,
@@ -101,6 +103,10 @@ export function getServerEnv() {
     ...env,
     WORDPRESS_ORIGIN_IP: validateWordPressOriginIp(env.WORDPRESS_ORIGIN_IP),
   };
+}
+
+export function isOperatorAuthenticationRequired() {
+  return getServerEnv().FOUNDRY_AUTH_REQUIRED === "true";
 }
 
 export function getOperatorAuthConfig(): OperatorAuthConfig & {

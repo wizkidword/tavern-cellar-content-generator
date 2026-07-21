@@ -1,4 +1,7 @@
+import { redirect } from "next/navigation";
+
 import { loginOperatorAction } from "@/app/login/actions";
+import { isOperatorAuthenticationRequired } from "@/lib/env";
 
 type LoginPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -24,6 +27,10 @@ function messageFor(code: string | undefined) {
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
+  if (!isOperatorAuthenticationRequired()) {
+    redirect("/");
+  }
+
   const params = searchParams ? await searchParams : undefined;
   const error = firstValue(params?.error);
   const message = firstValue(params?.message);

@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { logoutOperatorAction } from "@/app/login/actions";
+import { isOperatorAuthenticationRequired } from "@/lib/env";
 
 const navItems = [
   { href: "/", label: "Dashboard" },
@@ -12,6 +13,8 @@ const navItems = [
 ];
 
 export function FoundryNav() {
+  const authenticationRequired = isOperatorAuthenticationRequired();
+
   return (
     <nav className="foundry-nav" aria-label="Foundry navigation">
       <Link className="foundry-brand" href="/">
@@ -23,11 +26,13 @@ export function FoundryNav() {
             {item.label}
           </Link>
         ))}
-        <form action={logoutOperatorAction}>
-          <button className="foundry-nav-link border-0 bg-transparent" type="submit">
-            Sign out
-          </button>
-        </form>
+        {authenticationRequired ? (
+          <form action={logoutOperatorAction}>
+            <button className="foundry-nav-link border-0 bg-transparent" type="submit">
+              Sign out
+            </button>
+          </form>
+        ) : null}
       </div>
     </nav>
   );

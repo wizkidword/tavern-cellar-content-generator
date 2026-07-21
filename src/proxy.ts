@@ -19,6 +19,12 @@ function unauthorizedApiResponse() {
 }
 
 export function proxy(request: NextRequest) {
+  if (process.env.FOUNDRY_AUTH_REQUIRED === "false") {
+    const response = NextResponse.next();
+    response.headers.set("X-Robots-Tag", "noindex, nofollow");
+    return response;
+  }
+
   const session = verifyOperatorSessionToken(
     request.cookies.get(SESSION_COOKIE_NAME)?.value,
     process.env.SESSION_SECRET ?? "",
