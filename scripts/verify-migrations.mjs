@@ -78,6 +78,11 @@ function verifyFreshInstall() {
       runPrisma(["migrate", "status", "--schema", "prisma/schema.prisma"], environment),
       /Database schema is up to date/,
     );
+    run(
+      process.execPath,
+      ["--import", "tsx", "--test", "tests/publishing/publish-attempts.integration.ts"],
+      environment,
+    );
 
     const setupSql = writeSql(
       backupDirectory,
@@ -143,7 +148,7 @@ function verifyLegacyBaseline() {
   try {
     writeFileSync(databasePath(filename), "", { flag: "wx" });
     runPrisma(["db", "push", "--schema", "prisma/schema.prisma", "--skip-generate"], environment);
-    assert.match(runMigration(environment), /Existing database matches the baseline/);
+    assert.match(runMigration(environment), /Existing database matches the checked-in migration history/);
     assert.equal(readdirSync(backupDirectory).length, 1);
     assert.match(
       runPrisma(["migrate", "status", "--schema", "prisma/schema.prisma"], environment),

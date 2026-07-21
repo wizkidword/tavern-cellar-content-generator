@@ -7,6 +7,7 @@ import {
   createArticle,
   generateArticleModelComparison,
   publishArticle,
+  reconcileArticlePublish,
   regenerateArticleBodyImages,
   regenerateFeaturedImage,
   saveArticleReview,
@@ -423,6 +424,26 @@ export async function publishNowAction(articleId: string, formData: FormData) {
         article.notes?.includes("Yoast SEO REST bridge")
           ? "Article published to WordPress. Tags were synced. Yoast fields still need the companion bridge plugin installed on WordPress."
           : "Article published to WordPress. Tags were synced.",
+    });
+  } catch (error) {
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      error: getErrorMessage(error),
+    });
+  }
+
+  redirect(targetPath);
+}
+
+export async function reconcileArticlePublishAction(articleId: string) {
+  let targetPath = `/articles/${articleId}`;
+
+  try {
+    await assertOperatorActionAccess();
+    await reconcileArticlePublish(articleId);
+    revalidatePath(`/articles/${articleId}`);
+    revalidatePath("/");
+    targetPath = buildRedirect(`/articles/${articleId}`, {
+      message: "Publish recovery completed. The existing WordPress post was reconciled before retrying.",
     });
   } catch (error) {
     targetPath = buildRedirect(`/articles/${articleId}`, {

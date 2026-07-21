@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { prisma } from "@/lib/db";
-import { AppError } from "@/lib/errors/app-error";
+import { AppError, toAppError } from "@/lib/errors/app-error";
 import { getServerEnv, requireWordPressAuthEnv } from "@/lib/env";
 import { fetchWithPolicy } from "@/lib/http/fetch-policy";
 import { renderSanitizedArticleHtml } from "@/lib/rendering/sanitize-html";
@@ -47,6 +47,13 @@ type WordPressPostEditRecord = {
   yoast_head?: string;
 };
 
+type WordPressPublishRecord = {
+  id: number;
+  status: string;
+  date_gmt?: string;
+  link?: string;
+};
+
 type WordPressMediaRecord = {
   id: number;
   source_url?: string;
@@ -72,6 +79,11 @@ export type WordPressScheduledPostTime = {
 function wordpressApiUrl(pathname: string) {
   const env = getServerEnv();
   return new URL(`/wp-json/wp/v2${pathname}`, env.WORDPRESS_URL).toString();
+}
+
+function wordpressFoundryApiUrl(pathname: string) {
+  const env = getServerEnv();
+  return new URL(`/wp-json/tavern-cellar/v1${pathname}`, env.WORDPRESS_URL).toString();
 }
 
 function stripHtml(value: string) {
@@ -515,6 +527,58 @@ function createAuthHeaders(contentType = "application/json") {
   return buildBasicAuthHeaders(env.WORDPRESS_USERNAME, env.WORDPRESS_APP_PASSWORD, contentType);
 }
 
+export async function findWordPressPostByOperationKey(operationKey: string) {
+  const response = await fetchWordPressRead(
+    wordpressFoundryApiUrl(`/publish-attempt/${encodeURIComponent(operationKey)}`),
+    {
+      headers: createAuthHeaders(),
+    },
+  );
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await buildWordPressError(response);
+  }
+
+  const payload = (await response.json()) as WordPressPublishRecord;
+
+  if (!Number.isInteger(payload.id) || payload.id <= 0 || !payload.status) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+
+  return payload;
+}
+
+async function createWordPressDraftPlaceholder(article: Article, operationKey: string) {
+  const response = await fetchWordPressWrite(wordpressApiUrl("/posts"), {
+    method: "POST",
+    headers: createAuthHeaders(),
+    body: JSON.stringify({
+      title: article.title,
+      slug: article.slug,
+      status: "draft",
+      meta: {
+        _tavern_cellar_publish_operation_key: operationKey,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw await buildWordPressError(response);
+  }
+
+  const payload = (await response.json()) as WordPressPublishRecord;
+
+  if (!Number.isInteger(payload.id) || payload.id <= 0) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+
+  return payload;
+}
+
 async function upsertWordPressCategoryRecord(
   category: WordPressCategoryRecord,
   options: { isActive?: boolean } = {},
@@ -813,6 +877,12 @@ type WordPressSchedule = {
   utcDateTime: Date;
 };
 
+type PublishProgressCallbacks = {
+  onPostIdentified?: (post: WordPressPublishRecord) => Promise<void>;
+  onMediaComplete?: (post: WordPressPublishRecord) => Promise<void>;
+  onContentComplete?: (post: WordPressPublishRecord) => Promise<void>;
+};
+
 function toWordPressLocalDateTime(value: string) {
   return value.length === 16 ? `${value}:00` : value;
 }
@@ -848,12 +918,75 @@ export function buildWordPressPostTimingFields(input: {
   return fields;
 }
 
+async function identifyWordPressPost(input: {
+  article: Article;
+  operationKey?: string;
+  allowPlaceholderCreation?: boolean;
+  onPostIdentified?: (post: WordPressPublishRecord) => Promise<void>;
+}) {
+  if (input.article.wpPostId) {
+    const knownPost = {
+      id: input.article.wpPostId,
+      status: input.article.wpStatus ?? "draft",
+    };
+    await input.onPostIdentified?.(knownPost);
+    return knownPost;
+  }
+
+  if (!input.operationKey) {
+    return null;
+  }
+
+  const reconciledPost = await findWordPressPostByOperationKey(input.operationKey);
+
+  if (reconciledPost) {
+    await input.onPostIdentified?.(reconciledPost);
+    return reconciledPost;
+  }
+
+  if (input.allowPlaceholderCreation === false) {
+    throw new AppError("WP_WRITE_UNCERTAIN");
+  }
+
+  try {
+    const createdPost = await createWordPressDraftPlaceholder(input.article, input.operationKey);
+    await input.onPostIdentified?.(createdPost);
+    return createdPost;
+  } catch (error) {
+    const appError = toAppError(error);
+
+    if (appError.code !== "WP_WRITE_UNCERTAIN") {
+      throw appError;
+    }
+
+    const reconciledAfterUncertainWrite = await findWordPressPostByOperationKey(input.operationKey);
+
+    if (!reconciledAfterUncertainWrite) {
+      throw appError;
+    }
+
+    await input.onPostIdentified?.(reconciledAfterUncertainWrite);
+    return reconciledAfterUncertainWrite;
+  }
+}
+
 export async function pushArticleToWordPress(
   article: Article & { category: Category; bodyImages?: ArticleBodyImage[] },
   mode: PublishMode,
   schedule?: WordPressSchedule | null,
-  options: { publishAt?: Date | null } = {},
+  options: {
+    publishAt?: Date | null;
+    operationKey?: string;
+    allowPlaceholderCreation?: boolean;
+    progress?: PublishProgressCallbacks;
+  } = {},
 ) {
+  const identifiedPost = await identifyWordPressPost({
+    article,
+    operationKey: options.operationKey,
+    allowPlaceholderCreation: options.allowPlaceholderCreation,
+    onPostIdentified: options.progress?.onPostIdentified,
+  });
   const uploadedMedia = await uploadFeaturedMedia(article);
   const bodyImages = await uploadBodyMediaImages(article);
   let featuredMedia = uploadedMedia;
@@ -879,6 +1012,7 @@ export async function pushArticleToWordPress(
     bodyImages,
   });
   const tagIds = await getOrCreateTagIds(article.tags);
+  const knownPostId = identifiedPost?.id ?? article.wpPostId;
 
   const body: Record<string, Prisma.JsonValue | string | number | number[] | null> = {
     title: article.title,
@@ -893,6 +1027,9 @@ export async function pushArticleToWordPress(
       _yoast_wpseo_title: article.metaTitle,
       _yoast_wpseo_metadesc: article.metaDescription,
       _yoast_wpseo_focuskw: article.primaryKeyword,
+      ...(options.operationKey
+        ? { _tavern_cellar_publish_operation_key: options.operationKey }
+        : {}),
     },
   };
   Object.assign(
@@ -904,8 +1041,15 @@ export async function pushArticleToWordPress(
     }),
   );
 
-  const endpoint = article.wpPostId
-    ? wordpressApiUrl(`/posts/${article.wpPostId}`)
+  if (knownPostId) {
+    await options.progress?.onMediaComplete?.({
+      id: knownPostId,
+      status: identifiedPost?.status ?? article.wpStatus ?? "draft",
+    });
+  }
+
+  const endpoint = knownPostId
+    ? wordpressApiUrl(`/posts/${knownPostId}`)
     : wordpressApiUrl("/posts");
 
   const response = await fetchWordPressWrite(endpoint, {
@@ -918,14 +1062,21 @@ export async function pushArticleToWordPress(
     throw await buildWordPressError(response);
   }
 
-  const payload = (await response.json()) as {
-    id: number;
-    status: string;
-    date_gmt?: string;
-    link?: string;
-  };
+  const payload = (await response.json()) as WordPressPublishRecord;
 
-  const yoastMetaApplied = await detectYoastMetaSupport(payload.id, article.metaDescription);
+  if (!Number.isInteger(payload.id) || payload.id <= 0 || !payload.status) {
+    throw new AppError("WP_RESPONSE_INVALID");
+  }
+
+  await options.progress?.onContentComplete?.(payload);
+
+  let yoastMetaApplied = false;
+
+  try {
+    yoastMetaApplied = await detectYoastMetaSupport(payload.id, article.metaDescription);
+  } catch {
+    yoastMetaApplied = false;
+  }
 
   return {
     ...payload,

@@ -15,6 +15,24 @@ enum ArticleStatus {
   SCHEDULED
 }
 
+enum PublishOperationState {
+  IDLE
+  IN_PROGRESS
+  SUCCEEDED
+  FAILED
+  UNCERTAIN
+}
+
+enum PublishAttemptState {
+  STARTED
+  POST_IDENTIFIED
+  MEDIA_COMPLETE
+  CONTENT_COMPLETE
+  SUCCEEDED
+  FAILED
+  UNCERTAIN
+}
+
 enum ContentOpportunityStatus {
   IDEA
   APPROVED
@@ -98,6 +116,8 @@ model Article {
   openAiImageModel                       String?
   categoryId                             Int
   status                                 ArticleStatus @default(GENERATED)
+  publishState                           PublishOperationState @default(IDLE)
+  activePublishOperationKey              String?       @unique
   wpPostId                               Int?          @unique
   wpStatus                               String?
   scheduledFor                           DateTime?
@@ -119,6 +139,7 @@ model Article {
   bodyImages              ArticleBodyImage[]
   contentOpportunities    ContentOpportunity[]
   modelComparisons        ArticleModelComparison[]
+  publishAttempts         PublishAttempt[]
   opportunitySimilarPosts OpportunitySimilarPost[]
   topicClusterItems       TopicClusterItem[]
 
@@ -127,6 +148,28 @@ model Article {
   @@index([status])
   @@index([normalizedTitle])
   @@index([normalizedKeyword])
+  @@index([publishState])
+}
+
+model PublishAttempt {
+  id                  String              @id @default(cuid())
+  articleId           String
+  operationKey        String              @unique
+  desiredWpStatus     String
+  state               PublishAttemptState @default(STARTED)
+  wpPostId            Int?
+  lastCheckpoint      String?
+  errorCode           String?
+  errorCorrelationId  String?
+  errorDetailInternal String?
+  warningCode         String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId, updatedAt])
+  @@index([state])
 }
 
 model ArticleBodyImage {

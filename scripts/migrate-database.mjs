@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -28,6 +28,13 @@ function databaseMatchesMigrationHistory(databaseUrl) {
   return result.status === 0;
 }
 
+function checkedInMigrationNames() {
+  return readdirSync(path.join("prisma", "migrations"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^\d+_.+/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+}
+
 async function migrateDatabase() {
   const database = getDatabaseConfig();
 
@@ -49,20 +56,24 @@ async function migrateDatabase() {
   if (baselineIsPending(status.output)) {
     if (!databaseMatchesMigrationHistory(database.databaseUrl)) {
       throw new Error(
-        "The existing SQLite schema does not match the checked-in migration baseline. No backup or migration was attempted; inspect the database before continuing.",
+        "The existing SQLite schema does not match the checked-in migration history. No backup or migration was attempted; inspect the database before continuing.",
       );
     }
 
     const backupPath = await createDatabaseBackup();
-    runPrismaChecked([
-      "migrate",
-      "resolve",
-      "--applied",
-      baselineMigration,
-      "--schema",
-      "prisma/schema.prisma",
-    ]);
-    console.log(`[foundry] Existing database matches the baseline. Backup created: ${backupPath}`);
+    for (const migrationName of checkedInMigrationNames()) {
+      runPrismaChecked([
+        "migrate",
+        "resolve",
+        "--applied",
+        migrationName,
+        "--schema",
+        "prisma/schema.prisma",
+      ]);
+    }
+    console.log(
+      `[foundry] Existing database matches the checked-in migration history. Backup created: ${backupPath}`,
+    );
   } else {
     const backupPath = await createDatabaseBackup();
     console.log(`[foundry] Backup created before applying pending migrations: ${backupPath}`);

@@ -14,6 +14,7 @@ import {
 import { isActiveAppCategory, sortCategoriesForApp } from "@/lib/category-config";
 import { prisma } from "@/lib/db";
 import { getServerEnv } from "@/lib/env";
+import { AppError } from "@/lib/errors/app-error";
 import {
   deleteGeneratedImageAsset,
   generateFeaturedImageAsset,
@@ -52,6 +53,13 @@ import {
   pushArticleToWordPress,
   syncWordPressCatalog,
 } from "@/lib/wordpress";
+import {
+  claimPublishAttempt,
+  completePublishAttempt,
+  failPublishAttempt,
+  getLatestPublishAttempt,
+  recordPublishAttemptCheckpoint,
+} from "@/lib/publishing/publish-attempts";
 import {
   formatDateTimeLocal,
   pickRandomWordPressScheduleSlot,
@@ -1091,6 +1099,92 @@ export async function regenerateArticleBodyImages(articleId: string, formData: F
   });
 }
 
+async function publishSavedArticle(
+  article: ArticleWithCategory & { bodyImages: ArticleBodyImage[] },
+  mode: WordPressPublishMode,
+  previousArticle: {
+    status: ArticleStatus;
+    wpStatus: string | null;
+    wpPostId: number | null;
+  } | null,
+  options: { allowInProgressRecovery?: boolean } = {},
+) {
+  let schedule: { localDateTime: string; utcDateTime: Date } | null = null;
+
+  if (mode === "future") {
+    ensureFutureSchedule(article);
+    schedule = {
+      localDateTime: article.scheduledForLocal,
+      utcDateTime: article.scheduledFor,
+    };
+  }
+
+  const publishAt = getForcedPublishTimestamp(mode, previousArticle);
+  const attempt = await claimPublishAttempt({
+    articleId: article.id,
+    desiredWpStatus: mode,
+    allowInProgressRecovery: options.allowInProgressRecovery,
+  });
+
+  try {
+    const payload = await pushArticleToWordPress(article, mode, schedule, {
+      publishAt,
+      operationKey: attempt.operationKey,
+      allowPlaceholderCreation: !attempt.preventPlaceholderCreation,
+      progress: {
+        onPostIdentified: async (post) => {
+          await recordPublishAttemptCheckpoint({
+            articleId: article.id,
+            operationKey: attempt.operationKey,
+            checkpoint: "POST_IDENTIFIED",
+            wpPostId: post.id,
+          });
+        },
+        onMediaComplete: async (post) => {
+          await recordPublishAttemptCheckpoint({
+            articleId: article.id,
+            operationKey: attempt.operationKey,
+            checkpoint: "MEDIA_COMPLETE",
+            wpPostId: post.id,
+          });
+        },
+        onContentComplete: async (post) => {
+          await recordPublishAttemptCheckpoint({
+            articleId: article.id,
+            operationKey: attempt.operationKey,
+            checkpoint: "CONTENT_COMPLETE",
+            wpPostId: post.id,
+          });
+        },
+      },
+    });
+    const notes = payload.yoastMetaApplied
+      ? article.notes
+      : mergeNotes(
+          article.notes,
+          "Yoast SEO REST bridge not detected on WordPress. Install the companion plugin from this repo to sync focus keyphrase, SEO title, and meta description automatically.",
+        );
+    const status = resolveArticleStatusFromWordPress(mode, payload.status);
+
+    return completePublishAttempt({
+      articleId: article.id,
+      operationKey: attempt.operationKey,
+      wpPostId: payload.id,
+      wpStatus: payload.status,
+      articleStatus: status,
+      publishedAt: status === ArticleStatus.PUBLISHED ? new Date() : article.publishedAt,
+      notes,
+      warningCode: payload.yoastMetaApplied ? null : "WP_YOAST_NOT_APPLIED",
+    });
+  } catch (error) {
+    throw await failPublishAttempt({
+      articleId: article.id,
+      operationKey: attempt.operationKey,
+      error,
+    });
+  }
+}
+
 export async function publishArticle(
   articleId: string,
   formData: FormData,
@@ -1105,43 +1199,47 @@ export async function publishArticle(
     },
   });
   const article = await saveArticleReview(articleId, formData);
-  let schedule: { localDateTime: string; utcDateTime: Date } | null = null;
 
-  if (mode === "future") {
-    ensureFutureSchedule(article);
-    schedule = {
-      localDateTime: article.scheduledForLocal,
-      utcDateTime: article.scheduledFor,
-    };
+  return publishSavedArticle(article, mode, previousArticle);
+}
+
+export async function reconcileArticlePublish(articleId: string) {
+  const latestAttempt = await getLatestPublishAttempt(articleId);
+
+  if (!latestAttempt) {
+    throw new AppError("PUBLISH_STATE_CONFLICT");
   }
 
-  const publishAt = getForcedPublishTimestamp(mode, previousArticle);
-  const payload = await pushArticleToWordPress(article, mode, schedule, { publishAt });
-  const notes = payload.yoastMetaApplied
-    ? article.notes
-    : mergeNotes(
-        article.notes,
-        "Yoast SEO REST bridge not detected on WordPress. Install the companion plugin from this repo to sync focus keyphrase, SEO title, and meta description automatically.",
-      );
+  if (!["draft", "publish", "future"].includes(latestAttempt.desiredWpStatus)) {
+    throw new AppError("PUBLISH_STATE_CONFLICT");
+  }
 
-  const status = resolveArticleStatusFromWordPress(mode, payload.status);
-
-  return prisma.article.update({
-    where: { id: article.id },
-    data: {
-      wpPostId: payload.id,
-      wpStatus: payload.status,
-      status,
-      notes,
-      publishedAt: status === ArticleStatus.PUBLISHED ? new Date() : article.publishedAt,
-    },
-    include: {
-      category: true,
-      bodyImages: {
-        orderBy: { sortOrder: "asc" },
-      },
-    },
+  const article = await prisma.article.findUnique({
+    where: { id: articleId },
+    include: articleWithBodyImagesInclude(),
   });
+
+  if (!article) {
+    throw new AppError("OPERATION_FAILED");
+  }
+
+  const recoverableState = ["FAILED", "UNCERTAIN"].includes(latestAttempt.state);
+  const interruptedInProgressOperation = article.publishState === "IN_PROGRESS";
+
+  if (!recoverableState && !interruptedInProgressOperation) {
+    throw new AppError("PUBLISH_STATE_CONFLICT");
+  }
+
+  return publishSavedArticle(
+    article,
+    latestAttempt.desiredWpStatus as WordPressPublishMode,
+    {
+      status: article.status,
+      wpStatus: article.wpStatus,
+      wpPostId: article.wpPostId,
+    },
+    { allowInProgressRecovery: interruptedInProgressOperation },
+  );
 }
 
 export async function scheduleArticleRandomly(articleId: string, formData: FormData) {
@@ -1179,6 +1277,10 @@ export async function getArticleById(articleId: string) {
       },
       modelComparisons: {
         orderBy: { updatedAt: "desc" },
+      },
+      publishAttempts: {
+        orderBy: { updatedAt: "desc" },
+        take: 1,
       },
       bodyImages: {
         orderBy: { sortOrder: "asc" },

@@ -7,12 +7,14 @@ import {
   generateArticleComparisonAction,
   publishNowAction,
   randomScheduleArticleAction,
+  reconcileArticlePublishAction,
   regenerateArticleBodyImagesAction,
   regenerateFeaturedImageAction,
   saveArticleReviewAction,
   scheduleArticleAction,
   sendWordPressDraftAction,
 } from "@/app/actions";
+import { PublishActionButton } from "@/app/publish-action-button";
 import { MAX_ARTICLE_BODY_IMAGE_COUNT } from "@/lib/article-body-images";
 import {
   getArticleById,
@@ -103,6 +105,11 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
   const openAiImageModelDefault = article.openAiImageModel
     ? resolveOpenAIImageModel(article.openAiImageModel)
     : DEFAULT_OPENAI_IMAGE_MODEL;
+  const latestPublishAttempt = article.publishAttempts[0] ?? null;
+  const canReconcilePublish =
+    article.publishState === "IN_PROGRESS" ||
+    latestPublishAttempt?.state === "FAILED" ||
+    latestPublishAttempt?.state === "UNCERTAIN";
 
   return (
     <main className="app-shell">
@@ -252,40 +259,81 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                   <button className="action-primary" type="submit">
                     Save Review Changes
                   </button>
-                  <button
+                  <PublishActionButton
                     className="action-secondary"
                     formAction={sendWordPressDraftAction.bind(null, article.id)}
+                    pendingLabel="Saving WordPress Draft..."
                     type="submit"
                   >
                     Push WordPress Draft
-                  </button>
-                  <button
+                  </PublishActionButton>
+                  <PublishActionButton
                     className="action-secondary"
                     formAction={publishNowAction.bind(null, article.id)}
+                    pendingLabel="Publishing..."
                     type="submit"
                   >
                     Publish Now
-                  </button>
-                  <button
+                  </PublishActionButton>
+                  <PublishActionButton
                     className="action-secondary"
                     formAction={scheduleArticleAction.bind(null, article.id)}
+                    pendingLabel="Scheduling..."
                     type="submit"
                   >
                     Schedule in WordPress
-                  </button>
-                  <button
+                  </PublishActionButton>
+                  <PublishActionButton
                     className="action-secondary"
                     formAction={randomScheduleArticleAction.bind(null, article.id)}
+                    pendingLabel="Finding a schedule..."
                     type="submit"
                   >
                     Random Schedule (Up to 60 Days)
-                  </button>
+                  </PublishActionButton>
                 </div>
 
                 <div className="rounded-[1.3rem] border border-[var(--line)] bg-black/10 px-4 py-4 text-sm text-[var(--muted)]">
                   WordPress post ID: {article.wpPostId ?? "Not created yet"}
                   <br />
                   WordPress status: {article.wpStatus ?? "Local only"}
+                  <br />
+                  Publish recovery state: {article.publishState.replaceAll("_", " ")}
+                  {latestPublishAttempt ? (
+                    <>
+                      <br />
+                      Latest publish checkpoint: {latestPublishAttempt.lastCheckpoint ?? latestPublishAttempt.state}
+                      {latestPublishAttempt.wpPostId ? (
+                        <>
+                          <br />
+                          Recovered WordPress post ID: {latestPublishAttempt.wpPostId}
+                        </>
+                      ) : null}
+                      {latestPublishAttempt.errorCode ? (
+                        <p className="mt-3 text-[#ffd2c7]">
+                          {getErrorFeedback(
+                            latestPublishAttempt.errorCode,
+                            latestPublishAttempt.errorCorrelationId ?? undefined,
+                          )}
+                        </p>
+                      ) : null}
+                      {latestPublishAttempt.warningCode ? (
+                        <p className="mt-3 text-[#ffe7aa]">
+                          WordPress accepted the core post update, but the optional Yoast metadata could not be confirmed.
+                        </p>
+                      ) : null}
+                      {canReconcilePublish ? (
+                        <PublishActionButton
+                          className="action-primary mt-3 w-full"
+                          formAction={reconcileArticlePublishAction.bind(null, article.id)}
+                          pendingLabel="Reconciling publish..."
+                          type="submit"
+                        >
+                          Reconcile and Retry Publish
+                        </PublishActionButton>
+                      ) : null}
+                    </>
+                  ) : null}
                 </div>
               </div>
             </section>

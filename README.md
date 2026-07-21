@@ -84,7 +84,7 @@ See [docs/implementation-status.md](docs/implementation-status.md) for the activ
 3. Review and edit the article on its detail page.
 4. Optionally generate the other text model for a side-by-side comparison.
 5. Optionally regenerate the featured image.
-6. Push a WordPress draft, publish immediately, or schedule it.
+6. Install or update the companion plugin to version 0.2.0 before the first publish, then push a WordPress draft, publish immediately, or schedule it. Foundry creates a private draft placeholder first and can reconcile that same post after an interrupted write.
 
 Scheduling stores the local wall-clock time you choose and sends that local time to WordPress, so verify the scheduled post in WordPress after scheduling if your server and WordPress timezone settings ever diverge.
 
@@ -92,5 +92,5 @@ Scheduling stores the local wall-clock time you choose and sends that local time
 
 - The duplicate guard compares new ideas against both the app ledger and the live WordPress post catalog.
 - Tags are created and attached in WordPress automatically during publish and draft sync.
-- Your current WordPress REST schema does not expose Yoast's editable SEO fields by default. A companion plugin is included in [wordpress-plugin](C:\Users\jrock\Documents\CODERSCORNER\CODEX\tavern-cellar-content-generator\wordpress-plugin\README.md) so Foundry can write focus keyphrase, SEO title, and meta description directly into Yoast.
+- Your current WordPress REST schema does not expose Yoast's editable SEO fields or Foundry's private publish-operation key by default. The version 0.2.0 companion plugin in [wordpress-plugin](C:\Users\jrock\Documents\CODERSCORNER\CODEX\tavern-cellar-content-generator\wordpress-plugin\README.md) lets Foundry write Yoast fields and safely reconcile interrupted first-publish attempts without exposing post content or credentials.
 - Browser automation was used in this session to verify the local UI. Next dev is configured with `allowedDevOrigins` for `127.0.0.1` so local browser automation works cleanly.

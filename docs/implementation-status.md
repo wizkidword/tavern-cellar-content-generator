@@ -44,6 +44,19 @@ Status: complete on 2026-07-21.
 - **Schema and migration notes:** Added `20260721143000_initial_baseline` and `20260721150000_relational_invariants`. The existing local database was validated before each migration and automatically backed up three times during the transition. No generated content or WordPress identifiers were changed.
 - **Verification:** The dedicated `npm run test:db` command passed for both fresh and legacy SQLite databases and demonstrated that invalid or duplicate polymorphic links are rejected at the database level. The normal test suite, lint, TypeScript, Prisma validation/generation, migration diff, production build, and dependency audit are run for the final phase check.
 
+## Phase 4 — recoverable WordPress publishing
+
+Status: complete on 2026-07-21.
+
+- **PUB-01 / PUB-02:** Added `PublishAttempt` and an article-level publish state. Every publish receives a durable operation key before WordPress is contacted. A short SQLite transaction claims the article, so a second request receives `PUBLISH_STATE_CONFLICT` instead of performing another remote write.
+- **PUB-03:** Updated the companion WordPress plugin to version 0.2.0. It stores a private operation key, exposes a minimal authenticated lookup endpoint, validates the key format, and checks the caller can edit the specific matched post.
+- **PUB-04 / PUB-06:** New posts are created as WordPress draft placeholders first. Foundry records the post ID immediately, checkpoints media and content, then transitions to the requested final status. A retry looks up the operation key before any create. If a previously uncertain operation cannot be found, Foundry leaves it uncertain rather than blindly creating a second post.
+- **PUB-05:** Optional Yoast verification is recorded as a warning on an otherwise successful publish; it no longer misreports a successful core post write as a full failure.
+- **PUB-07:** The article page shows publish recovery state, the latest safe checkpoint, known WordPress post ID, safe error/reference, optional Yoast warning, and a reconcile/retry action. Publish buttons disable while the form is pending.
+- **Schema and migration notes:** Added `20260721185710_publish_attempt_recovery` and `20260721185747_publish_attempt_error_reference`. The local database was backed up before each development migration. The safe legacy migrator now recognizes a former `db push` database that already matches the full checked-in history and records that history instead of reapplying tables.
+- **Known bounded risk:** Post creation is reconciled by a private operation key. A lost response during an individual media upload can still leave an unattached duplicate media asset because WordPress has no media-operation-key endpoint yet; the local post ID and already-persisted media IDs still prevent a duplicate post.
+- **Verification:** WordPress contract tests cover placeholder creation, reconciliation before retry, and refusal to create after an unreconciled uncertain write. A temporary SQLite test covers concurrent claim rejection, durable post-ID checkpointing, uncertain state, and operation-key reuse. `npm run test:db` also verifies fresh and legacy migration paths. PHP was not available on this workstation, so the plugin syntax check is deferred to CI or the WordPress host.
+
 ## Deferred by design
 
-- Publishing, sync, image, intelligence, and product-feature changes: Phases 4–9.
+- WordPress sync, image, intelligence, and product-feature changes: Phases 5–9.

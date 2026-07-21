@@ -316,3 +316,4 @@ CREATE INDEX "TopicClusterItem_articleId_idx" ON "TopicClusterItem"("articleId")
 
 -- CreateIndex
 CREATE INDEX "TopicClusterItem_opportunityId_idx" ON "TopicClusterItem"("opportunityId");
+
