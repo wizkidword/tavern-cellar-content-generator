@@ -69,6 +69,17 @@ Status: complete on 2026-07-21.
 - **Schema and migration notes:** Added `20260721191042_wordpress_sync_health` and `20260721191811_schedule_timezone_context`. The local SQLite database was backed up before the schedule-context migration; existing articles keep their existing schedule values and gain an optional timezone field.
 - **Verification:** Unit tests cover private pagination, first- and later-page auth failures without fallback, a public-only page-one restart, existing GET retry behavior, and timezone conversion. The SQLite rehearsal covers fully paginated posts and categories, full/private stale marking, public-only non-staling, stored timezone, and a failed run with a correlation reference. `npm test` now has 127 passing tests; `npm run test:db`, TypeScript, ESLint, Prisma validation/generation, migration status/diff, and a production build are run for the final phase check.
 
+## Phase 6 — recoverable image generation and replacement
+
+Status: complete on 2026-07-21.
+
+- **IMG-01:** Replaced machine-generated image warnings in editorial notes with structured featured/body image state, error code, and attempt time fields. New failures never overwrite operator notes. The migration safely extracts only standalone, recognizable legacy image warnings; ambiguous mixed notes are preserved unchanged.
+- **IMG-02 / IMG-03:** Image generation now writes to an operation-specific staging directory and validates before a file is promoted. Body-image replacement stages every new image first, then performs a short SQLite transaction to swap body rows and Markdown. Existing rows/files remain intact if generation, file promotion, or the database transaction fails. Featured-image replacement follows the same generate, promote, swap, then cleanup order.
+- **IMG-04:** New body images receive a stable asset key and an invisible local Markdown marker. Replacement can remove the correct generated image even if the operator edits the surrounding alt text or image URL; rendered publishing output remains clean.
+- **IMG-05:** Generated body alt text is concise and based on the intended visual and section, not the focus keyword. The review screen warns about empty or repeated alt text and exposes current image state, safe error code, and latest attempt time.
+- **Schema and migration notes:** Added `20260721193600_recoverable_image_assets`. The local database was backed up before the migration applied. Existing featured/body assets are marked as succeeded; legacy asset keys remain optional and new assets always get one.
+- **Verification:** Tests cover staged-file promotion, stable-marker removal after Markdown edits, structured retry state without mutating editorial notes, alt-text warnings, validation of generated image bytes, and existing bounded provider/download behavior. `npm test` has 128 passing tests; the SQLite migration rehearsal, TypeScript, ESLint, Prisma validation/diff, and production build are run for the final phase check.
+
 ## Deferred by design
 
 - WordPress sync, image, intelligence, and product-feature changes: Phases 5–9.

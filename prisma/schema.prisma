@@ -45,6 +45,14 @@ enum WordPressSyncState {
   FAILED
 }
 
+enum ImageOperationState {
+  IDLE
+  GENERATING
+  SUCCEEDED
+  FAILED
+  CLEANUP_WARNING
+}
+
 enum ContentOpportunityStatus {
   IDEA
   APPROVED
@@ -130,6 +138,13 @@ model Article {
   featuredImageAlt                       String
   featuredImagePath                      String?
   featuredImageMimeType                  String?
+  featuredImageState                     ImageOperationState @default(IDLE)
+  featuredImageErrorCode                 String?
+  featuredImageLastAttemptAt             DateTime?
+  bodyImagesState                        ImageOperationState @default(IDLE)
+  bodyImagesErrorCode                    String?
+  bodyImagesLastAttemptAt                DateTime?
+  bodyImagesOperationKey                 String?
   wpMediaId                              Int?
   openAiTextModel                        String
   openAiImageModel                       String?
@@ -218,6 +233,7 @@ model ArticleBodyImage {
   sectionHeading String
   sortOrder      Int
   publicPath     String
+  assetKey       String?  @unique
   mimeType       String   @default("image/png")
   imageModel     String
   wpMediaId      Int?

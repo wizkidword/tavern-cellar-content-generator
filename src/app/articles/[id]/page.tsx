@@ -18,6 +18,7 @@ import { PublishActionButton } from "@/app/publish-action-button";
 import { MAX_ARTICLE_BODY_IMAGE_COUNT } from "@/lib/article-body-images";
 import {
   getArticleById,
+  getArticleImageAltWarnings,
   getArticleImageRecoveryState,
   getDashboardData,
 } from "@/lib/content-pipeline";
@@ -101,6 +102,12 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
     featuredImagePath: article.featuredImagePath,
     bodyImageCount: article.bodyImages.length,
     notes: article.notes,
+    featuredImageState: article.featuredImageState,
+    bodyImagesState: article.bodyImagesState,
+  });
+  const imageAltWarnings = getArticleImageAltWarnings({
+    featuredImageAlt: article.featuredImageAlt,
+    bodyImageAlts: article.bodyImages.map((image) => image.altText),
   });
   const openAiImageModelDefault = article.openAiImageModel
     ? resolveOpenAIImageModel(article.openAiImageModel)
@@ -505,6 +512,14 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                   </div>
                 )}
 
+                <p className="text-xs leading-5 text-[var(--muted)]">
+                  Asset state: {article.featuredImageState.replaceAll("_", " ").toLowerCase()}
+                  {article.featuredImageErrorCode ? ` (${article.featuredImageErrorCode})` : ""}.
+                  {article.featuredImageLastAttemptAt
+                    ? ` Last attempted ${format(article.featuredImageLastAttemptAt, "PPpp")}.`
+                    : ""}
+                </p>
+
                 {imageRecovery.featuredImage.canRetry ? (
                   <div className="message message-error">
                     <p className="font-semibold text-[#fff4e1]">
@@ -551,6 +566,13 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                     defaultValue={article.featuredImageAlt}
                     required
                   />
+                  {imageAltWarnings.length > 0 ? (
+                    <div className="mt-2 space-y-1 text-xs leading-5 text-[#ffd2c7]">
+                      {imageAltWarnings.map((warning) => (
+                        <p key={warning}>{warning}</p>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div>
@@ -657,6 +679,14 @@ export default async function ArticlePage({ params, searchParams }: ArticlePageP
                     No article body images generated yet.
                   </div>
                 )}
+
+                <p className="text-xs leading-5 text-[var(--muted)]">
+                  Asset state: {article.bodyImagesState.replaceAll("_", " ").toLowerCase()}
+                  {article.bodyImagesErrorCode ? ` (${article.bodyImagesErrorCode})` : ""}.
+                  {article.bodyImagesLastAttemptAt
+                    ? ` Last attempted ${format(article.bodyImagesLastAttemptAt, "PPpp")}.`
+                    : ""}
+                </p>
 
                 {imageRecovery.bodyImages.reason === "failed" ? (
                   <div className="message message-error">

@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import sharp from "sharp";
 
 import {
@@ -15,6 +17,7 @@ import {
   buildFeaturedImagePrompt,
   getOpenAIFeaturedImageRequestSize,
   normalizeFeaturedImageBuffer,
+  promoteStagedGeneratedImage,
   resolveFalImageModel,
   resolveOpenAIImageModel,
   resolveFeaturedImageProvider,
@@ -146,6 +149,38 @@ test("featured image prompts request a clean 16:9 editorial hero", () => {
   assert.match(prompt, /16:9/);
   assert.match(prompt, /1280x720/);
   assert.match(prompt, /No visible text/);
+});
+
+test("promotes a staged image only after it has a complete staged file", async () => {
+  const operationKey = `featured-image-test-${process.pid}-${Date.now()}`;
+  const filename = `${operationKey}.png`;
+  const stagedPath = path.join(
+    process.cwd(),
+    "public",
+    "generated",
+    ".staging",
+    operationKey,
+    filename,
+  );
+  const finalPath = path.join(process.cwd(), "public", "generated", filename);
+  await fs.mkdir(path.dirname(stagedPath), { recursive: true });
+  await fs.writeFile(stagedPath, Buffer.from("validated test image"));
+
+  try {
+    const promoted = await promoteStagedGeneratedImage({
+      imageModel: "test-image-model",
+      mimeType: "image/png",
+      filename,
+      stagedPath,
+    });
+
+    assert.equal(promoted.publicPath, `/generated/${filename}`);
+    assert.equal(await fs.readFile(finalPath, "utf8"), "validated test image");
+    await assert.rejects(() => fs.access(stagedPath));
+  } finally {
+    await fs.rm(path.dirname(stagedPath), { force: true, recursive: true });
+    await fs.rm(finalPath, { force: true });
+  }
 });
 
 test("normalizes provider output to exactly 1280 by 720 png", async () => {

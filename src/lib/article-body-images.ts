@@ -16,14 +16,20 @@ export type ArticleBodyImageRequest = {
 };
 
 export type ArticleBodyImagePlacement = {
+  assetKey?: string | null;
   altText: string;
   publicPath: string;
   sectionHeading: string;
 };
 
 export type ArticleBodyImageReference = {
+  assetKey?: string | null;
   publicPath: string;
 };
+
+function assetMarker(assetKey: string) {
+  return `<!-- foundry-image:${assetKey} -->`;
+}
 
 const visualAssignments = [
   {
@@ -121,7 +127,7 @@ export function buildArticleBodyImageRequests(input: ArticleBodyImageRequestInpu
     requests.push({
       sortOrder,
       sectionHeading,
-      altText: `${input.primaryKeyword} body image for ${sectionHeading}`,
+      altText: `${assignment.name} supporting ${sectionHeading}`,
       prompt: [
         `Editorial article body image ${sortOrder} for "${input.title}".`,
         `Focus keyphrase: ${input.primaryKeyword}.`,
@@ -151,11 +157,14 @@ export function insertArticleBodyImageMarkdown(
   let updated = contentMarkdown.trimEnd();
 
   for (const image of images) {
-    if (updated.includes(`](${image.publicPath})`)) {
+    const marker = image.assetKey ? assetMarker(image.assetKey) : null;
+
+    if ((marker && updated.includes(marker)) || updated.includes(`](${image.publicPath})`)) {
       continue;
     }
 
     const imageMarkdown = `![${image.altText}](${image.publicPath})`;
+    const imageBlock = marker ? `${marker}\n${imageMarkdown}` : imageMarkdown;
     const lines = updated.split(/\r?\n/);
     const headingIndex = lines.findIndex(
       (line) => cleanInlineMarkdown(line.replace(/^#{2,3}\s+/, "")) === image.sectionHeading,
@@ -168,12 +177,12 @@ export function insertArticleBodyImageMarkdown(
         lines.splice(insertIndex, 1);
       }
 
-      lines.splice(insertIndex, 0, "", imageMarkdown, "");
+      lines.splice(insertIndex, 0, "", imageBlock, "");
       updated = lines.join("\n").trimEnd();
       continue;
     }
 
-    updated = `${updated}\n\n${imageMarkdown}`;
+    updated = `${updated}\n\n${imageBlock}`;
   }
 
   return `${updated}\n`;
@@ -184,18 +193,46 @@ export function removeArticleBodyImageMarkdown(
   images: ArticleBodyImageReference[],
 ) {
   const paths = new Set(images.map((image) => image.publicPath.trim()).filter(Boolean));
+  const markers = new Set(
+    images
+      .map((image) => image.assetKey?.trim())
+      .filter((assetKey): assetKey is string => Boolean(assetKey))
+      .map(assetMarker),
+  );
 
-  if (paths.size === 0) {
+  if (paths.size === 0 && markers.size === 0) {
     return contentMarkdown;
   }
 
-  return contentMarkdown
-    .split(/\r?\n/)
-    .filter((line) => {
-      const match = /^!\[[^\]]*\]\(([^)]+)\)\s*$/.exec(line.trim());
+  const lines = contentMarkdown.split(/\r?\n/);
+  const kept: string[] = [];
+  let skipNextImage = false;
 
-      return !match || !paths.has(match[1].trim());
-    })
+  for (const line of lines) {
+    if (markers.has(line.trim())) {
+      skipNextImage = true;
+      continue;
+    }
+
+    if (skipNextImage && /^!\[[^\]]*\]\([^)]+\)\s*$/.test(line.trim())) {
+      skipNextImage = false;
+      continue;
+    }
+
+    if (line.trim() !== "") {
+      skipNextImage = false;
+    }
+
+    const match = /^!\[[^\]]*\]\(([^)]+)\)\s*$/.exec(line.trim());
+
+    if (match && paths.has(match[1].trim())) {
+      continue;
+    }
+
+    kept.push(line);
+  }
+
+  return kept
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd()

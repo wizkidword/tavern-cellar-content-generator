@@ -247,12 +247,32 @@ export async function normalizeFeaturedImageBuffer(buffer: Buffer) {
     .toBuffer();
 }
 
+export type StagedGeneratedImageAsset = {
+  imageModel: string;
+  mimeType: "image/png";
+  filename: string;
+  stagedPath: string;
+};
+
+export type GeneratedImageAsset = Omit<StagedGeneratedImageAsset, "filename" | "stagedPath"> & {
+  publicPath: string;
+};
+
+function generatedImageDirectory() {
+  return path.join(process.cwd(), "public", "generated");
+}
+
+function stagingDirectory(operationKey: string) {
+  return path.join(generatedImageDirectory(), ".staging", operationKey);
+}
+
 async function writeGeneratedFeaturedImage(input: {
   articleId: string;
   buffer: Buffer;
   imageModel: string;
+  operationKey: string;
 }) {
-  const outputDirectory = path.join(process.cwd(), "public", "generated");
+  const outputDirectory = stagingDirectory(input.operationKey);
   const filename = `${input.articleId}-${Date.now()}-${randomUUID()}.png`;
   const fullPath = path.join(outputDirectory, filename);
   const normalized = await normalizeFeaturedImageBuffer(input.buffer);
@@ -262,14 +282,16 @@ async function writeGeneratedFeaturedImage(input: {
 
   return {
     imageModel: input.imageModel,
-    publicPath: `/generated/${filename}`,
-    mimeType: "image/png",
+    filename,
+    stagedPath: fullPath,
+    mimeType: "image/png" as const,
   };
 }
 
 async function generateOpenAIFeaturedImage(
   articleId: string,
   prompt: string,
+  operationKey: string,
   modelInput?: unknown,
 ) {
   const env = requireOpenAIEnv();
@@ -293,12 +315,14 @@ async function generateOpenAIFeaturedImage(
     articleId,
     buffer: Buffer.from(image.b64_json, "base64"),
     imageModel: imageRequest.model,
+    operationKey,
   });
 }
 
 async function generateFalFeaturedImage(
   articleId: string,
   prompt: string,
+  operationKey: string,
   modelInput?: unknown,
 ) {
   const env = requireFalEnv();
@@ -340,12 +364,14 @@ async function generateFalFeaturedImage(
     articleId,
     buffer: await readSafeRemoteImage(imageResponse),
     imageModel: modelId,
+    operationKey,
   });
 }
 
-export async function generateFeaturedImageAsset(
+export async function generateStagedFeaturedImageAsset(
   articleId: string,
   prompt: string,
+  operationKey: string,
   providerInput?: unknown,
   falModelInput?: unknown,
   openAiModelInput?: unknown,
@@ -357,11 +383,55 @@ export async function generateFeaturedImageAsset(
     return generateOpenAIFeaturedImage(
       articleId,
       prompt,
+      operationKey,
       openAiModelInput ?? env.OPENAI_IMAGE_MODEL,
     );
   }
 
-  return generateFalFeaturedImage(articleId, prompt, falModelInput);
+  return generateFalFeaturedImage(articleId, prompt, operationKey, falModelInput);
+}
+
+export async function promoteStagedGeneratedImage(
+  image: StagedGeneratedImageAsset,
+): Promise<GeneratedImageAsset> {
+  const outputDirectory = generatedImageDirectory();
+  const finalPath = path.join(outputDirectory, image.filename);
+
+  await fs.mkdir(outputDirectory, { recursive: true });
+  await fs.rename(image.stagedPath, finalPath);
+
+  return {
+    imageModel: image.imageModel,
+    mimeType: image.mimeType,
+    publicPath: `/generated/${image.filename}`,
+  };
+}
+
+export async function discardStagedGeneratedImages(images: StagedGeneratedImageAsset[]) {
+  const directories = new Set(images.map((image) => path.dirname(image.stagedPath)));
+
+  for (const directory of directories) {
+    await fs.rm(directory, { force: true, recursive: true });
+  }
+}
+
+export async function generateFeaturedImageAsset(
+  articleId: string,
+  prompt: string,
+  providerInput?: unknown,
+  falModelInput?: unknown,
+  openAiModelInput?: unknown,
+) {
+  const staged = await generateStagedFeaturedImageAsset(
+    articleId,
+    prompt,
+    randomUUID(),
+    providerInput,
+    falModelInput,
+    openAiModelInput,
+  );
+
+  return promoteStagedGeneratedImage(staged);
 }
 
 export async function deleteGeneratedImageAsset(publicPath?: string | null) {
@@ -369,7 +439,7 @@ export async function deleteGeneratedImageAsset(publicPath?: string | null) {
     return;
   }
 
-  const generatedDirectory = path.resolve(process.cwd(), "public", "generated");
+  const generatedDirectory = path.resolve(generatedImageDirectory());
   const fullPath = path.resolve(process.cwd(), "public", publicPath.replace(/^\//, ""));
 
   if (!fullPath.startsWith(`${generatedDirectory}${path.sep}`)) {
