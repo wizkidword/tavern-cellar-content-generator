@@ -17,6 +17,8 @@ import {
 import {
   buildRetroGamesStrategyGuidance,
   isRetroGamesCategory,
+  screenRetroGameOpportunities,
+  type RetroGameCoverageRecord,
 } from "@/lib/retro-games";
 import { buildCoverageMap, type CoverageBalanceLabel } from "@/lib/intelligence/coverage";
 import {
@@ -38,7 +40,10 @@ import {
   type FeaturedImageProvider,
   type OpenAIImageModel,
 } from "@/lib/featured-image";
-import { generateContentOpportunityIdeas } from "@/lib/openai";
+import {
+  generateContentOpportunityIdeas,
+  type SuggestedContentOpportunityIdea,
+} from "@/lib/openai";
 import { type OpenAITextModel } from "@/lib/openai-models";
 import {
   parseWordPressCategoryIds,
@@ -175,6 +180,59 @@ function duplicateEvidenceSummary(input: {
   return lines.length > 0
     ? lines
     : ["No same-category duplicate evidence was found in the local catalog."];
+}
+
+function retroGamesCoverageRecords(input: {
+  articles: Array<{
+    categoryId: number;
+    title: string;
+    primaryKeyword: string;
+    angle: string;
+    wpPostId: number | null;
+  }>;
+  sitePosts: Array<{
+    title: string;
+    excerpt: string | null;
+    wpPostId: number;
+  }>;
+  opportunities: Array<{
+    primaryKeyword: string;
+    angle: string;
+    status: string;
+  }>;
+  categoryId: number;
+}): RetroGameCoverageRecord[] {
+  const matchingArticles = input.articles.filter((article) => article.categoryId === input.categoryId);
+  const publishedArticlePostIds = new Set(
+    matchingArticles
+      .map((article) => article.wpPostId)
+      .filter((postId): postId is number => postId !== null),
+  );
+
+  return [
+    ...matchingArticles.map((article) => ({
+      title: article.title,
+      primaryKeyword: article.primaryKeyword,
+      angle: article.angle,
+      source: "app" as const,
+    })),
+    ...input.sitePosts
+      .filter((post) => !publishedArticlePostIds.has(post.wpPostId))
+      .map((post) => ({
+        title: post.title,
+        angle: post.title,
+        brief: post.excerpt,
+        source: "site" as const,
+      })),
+    ...input.opportunities
+      .filter((opportunity) => !["REJECTED", "ARCHIVED"].includes(opportunity.status))
+      .map((opportunity) => ({
+        title: opportunity.primaryKeyword,
+        primaryKeyword: opportunity.primaryKeyword,
+        angle: opportunity.angle,
+        source: "opportunity" as const,
+      })),
+  ];
 }
 
 export function buildOpportunityInsight(input: BuildOpportunityInsightInput): OpportunityInsight {
@@ -406,8 +464,10 @@ export async function loadOpportunityContext(categoryIdInput: number) {
         id: true,
         categoryId: true,
         title: true,
+        primaryKeyword: true,
         angle: true,
         status: true,
+        wpPostId: true,
         createdAt: true,
       },
       orderBy: { createdAt: "desc" },
@@ -416,6 +476,7 @@ export async function loadOpportunityContext(categoryIdInput: number) {
     prisma.sitePost.findMany({
       select: {
         id: true,
+        wpPostId: true,
         title: true,
         slug: true,
         link: true,
@@ -713,24 +774,96 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
     };
   }
 
-  const ideas = await generateContentOpportunityIdeas({
-    categoryName: category.name,
-    categorySlug: category.slug,
-    coverageSummary: coverageSummary(coverageLane),
-    strategyGuidance: isGameOfThronesUniverseCategory(category)
-      ? buildGameOfThronesFanoutGuidance()
-      : isRetroGamesCategory(category)
-        ? buildRetroGamesStrategyGuidance()
-        : undefined,
-    duplicateEvidenceSummaries: duplicateEvidenceSummary({
-      sitePosts: matchingSitePosts,
-      articles: sameCategoryArticles,
-      opportunities: sameCategoryOpportunities,
-    }),
-    internalLinkCandidates: realLinkCandidates,
+  const isGamesCategory = isRetroGamesCategory(category);
+  const baseDuplicateEvidence = duplicateEvidenceSummary({
+    sitePosts: matchingSitePosts,
+    articles: sameCategoryArticles,
+    opportunities: sameCategoryOpportunities,
   });
+  const gamesCoverage = isGamesCategory
+    ? retroGamesCoverageRecords({
+        articles,
+        sitePosts: matchingSitePosts,
+        opportunities: sameCategoryOpportunities,
+        categoryId: category.id,
+      })
+    : [];
+  const selectedIdeas: SuggestedContentOpportunityIdea[] = [];
+  let retryEvidence = baseDuplicateEvidence;
+  let textModel = "";
+  const maximumAttempts = isGamesCategory ? 3 : 1;
+
+  for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+    const ideas = await generateContentOpportunityIdeas({
+      categoryName: category.name,
+      categorySlug: category.slug,
+      coverageSummary: coverageSummary(coverageLane),
+      strategyGuidance: isGameOfThronesUniverseCategory(category)
+        ? buildGameOfThronesFanoutGuidance()
+        : isGamesCategory
+          ? buildRetroGamesStrategyGuidance()
+          : undefined,
+      duplicateEvidenceSummaries: retryEvidence,
+      internalLinkCandidates: realLinkCandidates,
+    });
+    textModel = ideas.textModel;
+    const decisions: Array<{
+      opportunity: SuggestedContentOpportunityIdea;
+      allowed: boolean;
+      reason?: string;
+    }> = isGamesCategory
+      ? screenRetroGameOpportunities({
+          opportunities: ideas.opportunities,
+          existingCoverage: [
+            ...gamesCoverage,
+            ...selectedIdeas.map((opportunity) => ({
+              title: opportunity.primaryKeyword,
+              primaryKeyword: opportunity.primaryKeyword,
+              angle: opportunity.angle,
+              brief: opportunity.brief,
+              source: "opportunity" as const,
+            })),
+          ],
+        })
+      : ideas.opportunities.map((opportunity) => ({ opportunity, allowed: true }));
+
+    for (const decision of decisions) {
+      const normalizedKeyword = normalizeTopicValue(decision.opportunity.primaryKeyword);
+      const normalizedAngle = normalizeTopicValue(decision.opportunity.angle);
+      const isAlreadySelected = selectedIdeas.some(
+        (opportunity) =>
+          normalizeTopicValue(opportunity.primaryKeyword) === normalizedKeyword &&
+          normalizeTopicValue(opportunity.angle) === normalizedAngle,
+      );
+
+      if (decision.allowed && !isAlreadySelected && selectedIdeas.length < 5) {
+        selectedIdeas.push(decision.opportunity);
+      }
+    }
+
+    if (!isGamesCategory || selectedIdeas.length >= 3) {
+      break;
+    }
+
+    retryEvidence = [
+      ...baseDuplicateEvidence,
+      ...selectedIdeas.map(
+        (opportunity) =>
+          `${opportunity.primaryKeyword}: ${opportunity.angle} (selected in this generation run)`,
+      ),
+      ...decisions
+        .filter((decision) => !decision.allowed)
+        .map((decision) => decision.reason ?? decision.opportunity.primaryKeyword),
+      "The previous suggestions were rejected because they repeat a covered game. Choose different games, not new wording for the same games.",
+    ];
+  }
+
+  if (selectedIdeas.length === 0 || !textModel) {
+    throw new Error("No new Games ideas could be found without repeating existing coverage. Try again after syncing WordPress coverage.");
+  }
+
   const opportunities = await persistOpportunities(
-    ideas.opportunities.map((idea) => ({
+    selectedIdeas.map((idea) => ({
       categoryId: category.id,
       primaryKeyword: idea.primaryKeyword,
       angle: idea.angle,
@@ -741,7 +874,7 @@ export async function generateOpportunitiesForCategory(categoryIdInput: number) 
 
   return {
     opportunities,
-    textModel: ideas.textModel,
+    textModel,
   };
 }
 
